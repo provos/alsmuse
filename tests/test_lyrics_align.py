@@ -598,8 +598,8 @@ class TestAlignLyrics:
                 model_size="small",
             )
 
-        # Verify model was loaded with MPS device
-        mock_stable_whisper.load_model.assert_called_once_with("small", device="mps")
+        # Verify model was loaded with CPU device (MPS falls back to CPU due to float64 issue)
+        mock_stable_whisper.load_model.assert_called_once_with("small", device="cpu")
 
     def test_skips_empty_words(self) -> None:
         """Words with empty text after stripping are skipped."""

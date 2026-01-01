@@ -241,6 +241,7 @@ def align_lyrics(
     """
     try:
         import stable_whisper  # type: ignore[import-not-found]
+        import torch  # type: ignore[import-not-found]
     except ImportError as e:
         raise AlignmentError(
             "stable-ts is not installed. "
@@ -249,6 +250,12 @@ def align_lyrics(
 
     # Select optimal compute device (GPU/MPS/CPU)
     device = get_compute_device()
+
+    # MPS doesn't support float64 which stable-ts requires internally.
+    # Fall back to CPU for reliable operation on macOS.
+    # CPU is still fast for alignment (uses all cores).
+    if device == "mps":
+        device = "cpu"
 
     try:
         model = stable_whisper.load_model(model_size, device=device)

@@ -243,12 +243,12 @@ def create_minimal_als_xml(
           </Name>
           <DeviceChain>
             <MainSequencer>
-              <ClipTimeable>
+              <Sample>
                 <ArrangerAutomation>
                   <Events>{clips_xml}
                   </Events>
                 </ArrangerAutomation>
-              </ClipTimeable>
+              </Sample>
             </MainSequencer>
           </DeviceChain>
         </AudioTrack>'''
@@ -868,12 +868,15 @@ class TestCombineClipsToAudio:
         # Just verify file was created successfully
         assert len(data) > 0
 
-    def test_sample_rate_mismatch_raises_error(self, tmp_path: Path) -> None:
-        """Mismatched sample rates raise ValueError."""
+    def test_sample_rate_mismatch_resamples(self, tmp_path: Path) -> None:
+        """Mismatched sample rates are resampled to match."""
+        import soundfile as sf
+
         audio1 = tmp_path / "clip1.wav"
         audio2 = tmp_path / "clip2.wav"
 
         # Create files with different sample rates
+        # More 44100 files so that becomes the target
         create_test_wav(audio1, duration_seconds=1.0, sample_rate=44100)
         create_test_wav(audio2, duration_seconds=1.0, sample_rate=48000)
 
@@ -883,8 +886,14 @@ class TestCombineClipsToAudio:
         ]
         output_path = tmp_path / "combined.wav"
 
-        with pytest.raises(ValueError, match="Sample rate mismatch"):
-            combine_clips_to_audio(clips, output_path)
+        # Should succeed - resampling handles the mismatch
+        result_path, valid_ranges = combine_clips_to_audio(clips, output_path)
+
+        assert result_path.exists()
+        data, sr = sf.read(str(result_path))
+        # Output uses the most common sample rate (44100 in this case)
+        assert sr == 44100
+        assert len(valid_ranges) == 2
 
     def test_mono_to_stereo_conversion(self, tmp_path: Path) -> None:
         """Mono clips are converted to stereo when first clip is stereo."""

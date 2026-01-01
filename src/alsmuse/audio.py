@@ -153,8 +153,9 @@ def _extract_audio_clips_from_track(
     """
     clips: list[AudioClipRef] = []
 
-    # Path to arrangement clips (same pattern as parser.py)
-    events_path = "DeviceChain/MainSequencer/ClipTimeable/ArrangerAutomation/Events"
+    # Path to arrangement clips for audio tracks
+    # Note: Audio tracks use Sample/ArrangerAutomation, not ClipTimeable
+    events_path = "DeviceChain/MainSequencer/Sample/ArrangerAutomation/Events"
     events_elem = track_element.find(events_path)
 
     if events_elem is None:
@@ -344,6 +345,71 @@ def get_unique_vocal_track_names(clips: list[AudioClipRef]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _get_target_sample_rate(clips: list[AudioClipRef]) -> int:
+    """Determine the target sample rate (most common among clips).
+
+    Args:
+        clips: List of audio clips to analyze.
+
+    Returns:
+        The most common sample rate among the clips.
+    """
+    import soundfile as sf
+    from collections import Counter
+
+    rates: list[int] = []
+    for clip in clips:
+        try:
+            info = sf.info(str(clip.file_path))
+            rates.append(info.samplerate)
+        except Exception:
+            continue
+
+    if not rates:
+        return 44100  # Default fallback
+
+    # Return most common sample rate
+    counter = Counter(rates)
+    return counter.most_common(1)[0][0]
+
+
+def _resample_audio(
+    audio: "np.ndarray",  # type: ignore[name-defined]
+    orig_sr: int,
+    target_sr: int,
+) -> "np.ndarray":  # type: ignore[name-defined]
+    """Resample audio using torchaudio (fast, GPU-capable).
+
+    Args:
+        audio: Audio data as numpy array (samples,) or (samples, channels).
+        orig_sr: Original sample rate.
+        target_sr: Target sample rate.
+
+    Returns:
+        Resampled audio as numpy array.
+    """
+    import numpy as np
+    import torch
+    import torchaudio
+
+    # Convert to torch tensor
+    # torchaudio expects (channels, samples) format
+    if audio.ndim == 1:
+        tensor = torch.from_numpy(audio).unsqueeze(0)  # (1, samples)
+    else:
+        tensor = torch.from_numpy(audio).T  # (channels, samples)
+
+    # Resample
+    resampler = torchaudio.transforms.Resample(orig_sr, target_sr)
+    resampled = resampler(tensor)
+
+    # Convert back to numpy in original format
+    if audio.ndim == 1:
+        return resampled.squeeze(0).numpy()
+    else:
+        return resampled.T.numpy()
+
+
 def combine_clips_to_audio(
     clips: list[AudioClipRef],
     output_path: Path,
@@ -368,7 +434,7 @@ def combine_clips_to_audio(
         - List of (start_seconds, end_seconds) tuples for valid audio ranges
 
     Raises:
-        ValueError: If clips list is empty or sample rates don't match.
+        ValueError: If clips list is empty.
         RuntimeError: If soundfile is not installed.
     """
     try:
@@ -383,8 +449,13 @@ def combine_clips_to_audio(
     if not clips:
         raise ValueError("No clips to combine")
 
-    # Load first clip to get sample rate and channel count
-    first_audio, sample_rate = sf.read(str(clips[0].file_path), dtype="float32")
+    # Determine target sample rate (most common among clips)
+    sample_rate = _get_target_sample_rate(clips)
+
+    # Load first clip to determine channel count
+    first_audio, first_sr = sf.read(str(clips[0].file_path), dtype="float32")
+    if first_sr != sample_rate:
+        first_audio = _resample_audio(first_audio, first_sr, sample_rate)
     channels = first_audio.shape[1] if first_audio.ndim > 1 else 1
 
     # Calculate total duration in samples
@@ -403,12 +474,9 @@ def combine_clips_to_audio(
     for clip in clips:
         audio, sr = sf.read(str(clip.file_path), dtype="float32")
 
-        # Require matching sample rates (resampling adds complexity)
+        # Resample if needed (uses torchaudio for speed)
         if sr != sample_rate:
-            raise ValueError(
-                f"Sample rate mismatch: {clip.file_path} is {sr}Hz, "
-                f"expected {sample_rate}Hz. Resample audio to match."
-            )
+            audio = _resample_audio(audio, sr, sample_rate)
 
         # Handle mono/stereo mismatch
         if channels > 1 and audio.ndim == 1:

@@ -313,15 +313,10 @@ def align_and_distribute_lyrics(
         except Exception as e:
             raise AlignmentError(f"Failed to combine audio clips: {e}") from e
 
-        # Step 4: Parse lyrics and run alignment
-        lyrics_dict = parse_lyrics_file(lyrics_path)
+        # Step 4: Read lyrics as plain text and run alignment
+        all_lyrics_text = lyrics_path.read_text(encoding="utf-8").strip()
 
-        # Flatten all lyrics into plain text
-        all_lyrics_text = "\n".join(
-            line for lines in lyrics_dict.values() for line in lines
-        )
-
-        if not all_lyrics_text.strip():
+        if not all_lyrics_text:
             raise AlignmentError("Lyrics file is empty or contains no text")
 
         # Run forced alignment
@@ -332,7 +327,11 @@ def align_and_distribute_lyrics(
         )
 
         # Step 5: Reconstruct lines and distribute to phrases
-        original_lines = [line for lines in lyrics_dict.values() for line in lines]
+        original_lines = [
+            line.strip()
+            for line in all_lyrics_text.split("\n")
+            if line.strip()
+        ]
         timed_lines = words_to_lines(timed_words, original_lines)
 
         return distribute_timed_lyrics(phrases, timed_lines, bpm)
