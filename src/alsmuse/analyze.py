@@ -176,6 +176,8 @@ def analyze_als_v2(
                     use_all_vocals=use_all_vocals,
                     save_vocals_path=save_vocals_path,
                     save_lyrics_path=save_lyrics_path,
+                    language=language,
+                    model_size=model_size,
                 )
                 show_lyrics = True
             except AlignmentError as e:
@@ -290,6 +292,8 @@ def align_and_distribute_lyrics(
     use_all_vocals: bool = False,
     save_vocals_path: Path | None = None,
     save_lyrics_path: Path | None = None,
+    language: str = "en",
+    model_size: str = "base",
 ) -> list[Phrase]:
     """Full alignment pipeline: extract audio, align lyrics, distribute to phrases.
 
@@ -313,6 +317,8 @@ def align_and_distribute_lyrics(
         use_all_vocals: If True, use all detected vocal tracks without prompting
         save_vocals_path: If provided, save combined vocals to this path for validation
         save_lyrics_path: If provided, save aligned lyrics in LRC format
+        language: Language code for alignment model (default: "en")
+        model_size: Whisper model size (default: "base")
 
     Returns:
         Phrases with lyric fields populated from forced alignment.
@@ -383,6 +389,8 @@ def align_and_distribute_lyrics(
             combined_path,
             all_lyrics_text,
             valid_ranges=valid_ranges,
+            language=language,
+            model_size=model_size,
         )
 
         # Step 5: Reconstruct lines and distribute to phrases

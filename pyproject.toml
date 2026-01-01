@@ -47,4 +47,5 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 dev = [
     "mypy>=1.19.1",
     "pytest>=8.0.0",
+    "radon>=6.0.1",
 ]
