@@ -33,7 +33,10 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+select = ["E", "F", "I", "UP", "B", "SIM", "PLC0415"]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+]
 
 [dependency-groups]
 dev = [
