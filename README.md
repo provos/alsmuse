@@ -102,8 +102,8 @@ alsmuse analyze song.als --transcribe
 # Specify language and model size
 alsmuse analyze song.als --transcribe --language es --whisper-model medium
 
-# Save transcription for review
-alsmuse analyze song.als --transcribe --save-lyrics transcribed.txt
+# Save transcription for review (saved as LRC with timestamps)
+alsmuse analyze song.als --transcribe --save-lyrics transcribed.lrc
 ```
 
 ### Vocal Track Selection

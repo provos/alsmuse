@@ -86,7 +86,8 @@ def main() -> None:
     "--save-lyrics",
     type=click.Path(path_type=Path),
     default=None,
-    help="Save transcribed lyrics to this file for review/editing.",
+    help="Save transcribed lyrics to this file in LRC format with timestamps. "
+    "Can be edited and reused with --lyrics to avoid re-transcribing.",
 )
 @click.option(
     "-o",

@@ -381,6 +381,46 @@ def parse_enhanced_lrc(content: str) -> list[TimedLine]:
     return result
 
 
+def format_segments_as_lrc(segments: list["TimedSegment"]) -> str:
+    """Format transcribed segments as LRC lyrics.
+
+    Converts TimedSegment objects to LRC format with timestamps,
+    allowing the transcription to be saved and reloaded without
+    re-transcribing.
+
+    Args:
+        segments: List of TimedSegment objects from transcription.
+
+    Returns:
+        LRC-formatted string with timestamps.
+
+    Example:
+        >>> from alsmuse.models import TimedSegment, TimedWord
+        >>> segments = [
+        ...     TimedSegment(
+        ...         text="Hello world",
+        ...         start=1.5,
+        ...         end=3.0,
+        ...         words=(TimedWord("Hello", 1.5, 2.0), TimedWord("world", 2.5, 3.0)),
+        ...     ),
+        ... ]
+        >>> print(format_segments_as_lrc(segments))
+        [00:01.50]Hello world
+    """
+    from .models import TimedSegment  # Import here to avoid circular import
+
+    lines: list[str] = []
+    for segment in segments:
+        # Format timestamp as [mm:ss.xx]
+        total_seconds = segment.start
+        minutes = int(total_seconds // 60)
+        seconds = total_seconds % 60
+        timestamp = f"[{minutes:02d}:{seconds:05.2f}]"
+        lines.append(f"{timestamp}{segment.text}")
+
+    return "\n".join(lines)
+
+
 def parse_lyrics_file_auto(
     path: Path,
 ) -> tuple[list[TimedLine] | None, dict[str, list[str]] | None]:

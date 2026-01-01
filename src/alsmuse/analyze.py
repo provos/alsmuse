@@ -444,7 +444,7 @@ def transcribe_and_distribute_lyrics(
         extract_audio_clips,
         select_vocal_tracks,
     )
-    from .lyrics import distribute_timed_lyrics
+    from .lyrics import distribute_timed_lyrics, format_segments_as_lrc
     from .lyrics_align import segments_to_lines, transcribe_lyrics
 
     # Step 1: Extract all audio clips from ALS
@@ -498,10 +498,11 @@ def transcribe_and_distribute_lyrics(
             model_size=model_size,
         )
 
-        # Step 6: Save transcription if requested
+        # Step 6: Save transcription if requested (in LRC format with timestamps)
         if save_lyrics_path is not None:
             try:
-                save_lyrics_path.write_text(raw_text, encoding="utf-8")
+                lrc_content = format_segments_as_lrc(segments)
+                save_lyrics_path.write_text(lrc_content, encoding="utf-8")
                 logger.info("Saved transcribed lyrics to: %s", save_lyrics_path)
             except OSError as e:
                 logger.warning("Failed to save lyrics: %s", e)
