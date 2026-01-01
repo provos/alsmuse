@@ -26,17 +26,42 @@ uv run mypy src/
 
 ## Architecture
 
-- **src/alsmuse/cli.py**: Click-based CLI with command group structure. Entry point is `main()`.
-- **src/alsmuse/__init__.py**: Package init with version.
+See `DESIGN.md` for full architecture. Summary:
 
-The project uses:
-- **click** for CLI framework
-- **rich** for terminal output formatting
-- **librosa** for audio analysis
-- **matplotlib/plotly** for visualization
+```
+CLI (cli.py) → Application (analyze.py) → Parser + Extractors + Formatter
+                                                    ↓
+                                            Domain Models (models.py)
+```
+
+### Modules
+- **cli.py**: Click-based CLI, thin wrapper
+- **analyze.py**: Orchestrates parsing → extraction → formatting pipeline
+- **parser.py**: Parses ALS files (gzipped XML) into domain models
+- **extractors.py**: Section extraction strategies (Protocol pattern)
+- **formatter.py**: Output formatting (markdown A/V tables)
+- **models.py**: Immutable dataclasses (LiveSet, Track, Clip, Section, Tempo)
+
+### Key Dependencies
+- **click**: CLI framework
+- **rich**: Terminal output formatting
+- **librosa**: Audio analysis (future)
+- **matplotlib/plotly**: Visualization (future)
 
 ## Code Style
 
 - Python 3.12+
 - Ruff for linting (line length 100)
 - Ruff lint rules: E, F, I, UP, B, SIM
+
+## Research
+
+Use mgrep for web searches when you need external information:
+
+```bash
+mgrep --web --answer "<natural english question>"
+```
+
+Examples:
+- `mgrep --web --answer "Ableton Live ALS XML format structure"`
+- `mgrep --web --answer "Python dataclass frozen immutable best practices"`
