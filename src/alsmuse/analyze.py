@@ -6,12 +6,15 @@ parsing, extraction, and formatting of Ableton Live Set files.
 
 from pathlib import Path
 
-from .events import detect_events_from_clip_contents, merge_events_into_phrases
+from .events import (
+    detect_events_from_clip_contents_phrase_aligned,
+    merge_events_into_phrases,
+)
 from .extractors import StructureTrackExtractor, fill_gaps
 from .formatter import format_av_table, format_phrase_table
 from .lyrics import distribute_lyrics, parse_lyrics_file
 from .midi import extract_midi_clip_contents
-from .models import TrackEvent
+from .models import MidiClipContent, Phrase, TrackEvent
 from .parser import (
     extract_track_clips,
     extract_track_name,
@@ -97,7 +100,7 @@ def analyze_als_v2(
     phrases = subdivide_sections(sections, beats_per_phrase)
 
     if show_events:
-        events = detect_track_events_from_als(als_path, beats_per_phrase)
+        events = detect_track_events_from_als_phrase_aligned(als_path, phrases)
         phrases = merge_events_into_phrases(phrases, events)
 
     # Parse and distribute lyrics if provided
@@ -112,18 +115,20 @@ def analyze_als_v2(
     )
 
 
-def detect_track_events_from_als(
+def detect_track_events_from_als_phrase_aligned(
     als_path: Path,
-    resolution_beats: float = 8.0,
+    phrases: list[Phrase],
 ) -> list[TrackEvent]:
-    """Detect track events from MIDI tracks in an ALS file.
+    """Detect track events using phrase-aligned boundaries.
 
     Analyzes all MIDI tracks in the ALS file and generates enter/exit
-    events based on note activity.
+    events based on activity within each phrase's time boundaries.
+    This approach prevents false events at section boundaries caused
+    by the old global grid detection.
 
     Args:
         als_path: Path to the .als file
-        resolution_beats: Size of each detection window in beats.
+        phrases: List of Phrase objects defining the time boundaries.
 
     Returns:
         List of TrackEvent objects for all tracks.
@@ -148,7 +153,44 @@ def detect_track_events_from_als(
         if not clip_contents:
             continue
 
-        events = detect_events_from_clip_contents(track_name, clip_contents, resolution_beats)
+        events = detect_events_from_clip_contents_phrase_aligned(
+            track_name, clip_contents, phrases
+        )
         all_events.extend(events)
 
     return all_events
+
+
+def extract_track_clip_contents(als_path: Path) -> dict[str, list[MidiClipContent]]:
+    """Extract MIDI clip contents for all tracks in an ALS file.
+
+    This is a helper function that can be used for testing or advanced
+    analysis workflows.
+
+    Args:
+        als_path: Path to the .als file
+
+    Returns:
+        Dictionary mapping track names to their MidiClipContent lists.
+    """
+    root = parse_als_xml(als_path)
+    track_elements = get_track_elements(root)
+
+    result: dict[str, list[MidiClipContent]] = {}
+
+    for track_elem, track_type in track_elements:
+        if track_type != "midi":
+            continue
+
+        track_name = extract_track_name(track_elem)
+        clips = extract_track_clips(track_elem, track_type)
+
+        if not clips:
+            continue
+
+        clip_contents = extract_midi_clip_contents(track_elem, clips)
+
+        if clip_contents:
+            result[track_name] = clip_contents
+
+    return result

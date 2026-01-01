@@ -13,7 +13,14 @@ def extract_midi_notes(clip_element: Element) -> tuple[MidiNote, ...]:
     """Extract all MIDI notes from a clip element.
 
     Handles both Drum Rack (KeyTracks) and standard MIDI track structures.
-    Note times are relative to clip start.
+    Note times are adjusted by StartRelative offset and are relative to clip start.
+
+    The StartRelative value in the Loop element indicates the offset into the
+    clip's internal content where playback begins. Notes before this offset
+    are not played, and all note times must be adjusted by subtracting this value.
+
+    When LoopOn is true and the clip length exceeds the loop region, notes within
+    the loop region are repeated to fill the clip duration.
 
     Args:
         clip_element: A MidiClip XML element.
@@ -21,7 +28,42 @@ def extract_midi_notes(clip_element: Element) -> tuple[MidiNote, ...]:
     Returns:
         Tuple of MidiNote objects sorted by time.
     """
-    notes: list[MidiNote] = []
+    # Get loop settings from Loop element
+    loop_on = False
+    loop_start = 0.0
+    loop_end = 0.0
+    start_relative = 0.0
+
+    loop_elem = clip_element.find("Loop")
+    if loop_elem is not None:
+        loop_on_elem = loop_elem.find("LoopOn")
+        loop_on = loop_on_elem is not None and loop_on_elem.get("Value") == "true"
+
+        loop_start_elem = loop_elem.find("LoopStart")
+        if loop_start_elem is not None:
+            loop_start = float(loop_start_elem.get("Value", "0"))
+
+        loop_end_elem = loop_elem.find("LoopEnd")
+        if loop_end_elem is not None:
+            loop_end = float(loop_end_elem.get("Value", "0"))
+
+        start_rel_elem = loop_elem.find("StartRelative")
+        if start_rel_elem is not None:
+            start_relative = float(start_rel_elem.get("Value", "0"))
+
+    # Get clip length from Time attribute and CurrentEnd element
+    clip_time = float(clip_element.get("Time", "0"))
+    current_end_elem = clip_element.find("CurrentEnd")
+    clip_end = (
+        float(current_end_elem.get("Value", str(clip_time)))
+        if current_end_elem is not None
+        else clip_time
+    )
+    clip_length = clip_end - clip_time
+
+    loop_length = loop_end - loop_start
+
+    base_notes: list[MidiNote] = []
 
     # Strategy 1: KeyTracks structure (Drum Racks, most MIDI clips)
     for key_track in clip_element.findall(".//KeyTrack"):
@@ -32,13 +74,19 @@ def extract_midi_notes(clip_element: Element) -> tuple[MidiNote, ...]:
             if note_event.get("IsEnabled") == "false":
                 continue
 
-            time_val = note_event.get("Time", "0")
+            raw_time = float(note_event.get("Time", "0"))
+            adjusted_time = raw_time - start_relative
+
+            # Skip notes that are before the clip's start offset
+            if adjusted_time < 0:
+                continue
+
             duration_val = note_event.get("Duration", "0")
             velocity_val = note_event.get("Velocity", "100")
 
-            notes.append(
+            base_notes.append(
                 MidiNote(
-                    time=float(time_val),
+                    time=adjusted_time,
                     duration=float(duration_val),
                     velocity=int(float(velocity_val)),
                     pitch=pitch,
@@ -47,25 +95,63 @@ def extract_midi_notes(clip_element: Element) -> tuple[MidiNote, ...]:
 
     # Strategy 2: Fallback - find any MidiNoteEvent not already captured
     # This handles edge cases in XML structure variations
-    if not notes:
+    if not base_notes:
         for note_event in clip_element.findall(".//MidiNoteEvent"):
             if note_event.get("IsEnabled") == "false":
                 continue
 
-            time_val = note_event.get("Time", "0")
+            raw_time = float(note_event.get("Time", "0"))
+            adjusted_time = raw_time - start_relative
+
+            # Skip notes that are before the clip's start offset
+            if adjusted_time < 0:
+                continue
+
             duration_val = note_event.get("Duration", "0")
             velocity_val = note_event.get("Velocity", "100")
 
-            notes.append(
+            base_notes.append(
                 MidiNote(
-                    time=float(time_val),
+                    time=adjusted_time,
                     duration=float(duration_val),
                     velocity=int(float(velocity_val)),
                     pitch=0,  # Unknown pitch in fallback
                 )
             )
 
-    return tuple(sorted(notes, key=lambda n: n.time))
+    # Expand notes if looping is enabled and clip is longer than loop region
+    if loop_on and loop_length > 0 and clip_length > loop_length:
+        expanded_notes: list[MidiNote] = []
+
+        # Only notes within the loop region (time >= 0 and time < loop_length) repeat
+        loopable_notes = [n for n in base_notes if 0 <= n.time < loop_length]
+
+        # Notes outside the loop region play once at their original time
+        non_loopable_notes = [n for n in base_notes if n.time >= loop_length]
+
+        # Repeat loopable notes to fill the clip duration
+        repetition = 0
+        while repetition * loop_length < clip_length:
+            offset = repetition * loop_length
+            for note in loopable_notes:
+                new_time = note.time + offset
+                if new_time < clip_length:
+                    expanded_notes.append(
+                        MidiNote(
+                            time=new_time,
+                            duration=note.duration,
+                            velocity=note.velocity,
+                            pitch=note.pitch,
+                        )
+                    )
+            repetition += 1
+
+        # Add non-loopable notes (they play once at their original position)
+        expanded_notes.extend(non_loopable_notes)
+
+        return tuple(sorted(expanded_notes, key=lambda n: n.time))
+
+    return tuple(sorted(base_notes, key=lambda n: n.time))
 
 
 def extract_midi_clip_contents(
@@ -115,6 +201,39 @@ def extract_midi_clip_contents(
         contents.append(MidiClipContent(clip=clip, notes=notes))
 
     return contents
+
+
+def check_activity_in_range(
+    clip_contents: list[MidiClipContent],
+    start_beats: float,
+    end_beats: float,
+) -> bool:
+    """Check if any MIDI notes are active in the given beat range.
+
+    Examines all clips in the provided list and checks if any note
+    overlaps with the specified range. This is the building block
+    for phrase-aligned event detection.
+
+    Args:
+        clip_contents: List of MidiClipContent for a track.
+        start_beats: Start of the range to check (absolute beats).
+        end_beats: End of the range to check (absolute beats).
+
+    Returns:
+        True if any note is active in the range, False otherwise.
+    """
+    for content in clip_contents:
+        # Check if clip overlaps with the range
+        if content.clip.start_beats < end_beats and content.clip.end_beats > start_beats:
+            # Convert to clip-relative coordinates
+            relative_start = max(0.0, start_beats - content.clip.start_beats)
+            relative_end = min(
+                content.clip.end_beats - content.clip.start_beats,
+                end_beats - content.clip.start_beats,
+            )
+            if content.has_notes_in_range(relative_start, relative_end):
+                return True
+    return False
 
 
 def detect_midi_activity(

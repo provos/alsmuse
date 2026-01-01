@@ -4,6 +4,7 @@ This module provides track categorization based on name heuristics and
 event detection from MIDI activity patterns.
 """
 
+from .midi import check_activity_in_range
 from .models import MidiClipContent, Phrase, TrackEvent
 
 # Track category keywords for classification
@@ -116,6 +117,103 @@ def detect_events_from_clip_contents(
     category = categorize_track(track_name)
     activity = detect_midi_activity(clip_contents, resolution_beats)
     return detect_track_events(track_name, activity, category)
+
+
+def detect_phrase_activity(
+    phrases: list[Phrase],
+    clip_contents: list[MidiClipContent],
+) -> list[tuple[Phrase, bool]]:
+    """For each phrase, determine if track has any note activity.
+
+    Uses the phrase's exact time boundaries to check for MIDI note
+    activity, enabling phrase-aligned event detection.
+
+    Args:
+        phrases: List of Phrase objects to check activity for.
+        clip_contents: List of MidiClipContent for a track.
+
+    Returns:
+        List of (phrase, is_active) tuples.
+    """
+    result: list[tuple[Phrase, bool]] = []
+    for phrase in phrases:
+        is_active = check_activity_in_range(
+            clip_contents, phrase.start_beats, phrase.end_beats
+        )
+        result.append((phrase, is_active))
+    return result
+
+
+def detect_events_from_phrase_activity(
+    track_name: str,
+    phrase_activity: list[tuple[Phrase, bool]],
+    category: str,
+) -> list[TrackEvent]:
+    """Compare adjacent phrases to detect state changes.
+
+    Events are placed at the START of the phrase where the change occurs.
+    This approach aligns events with musical structure rather than an
+    arbitrary global grid.
+
+    Args:
+        track_name: Name of the track.
+        phrase_activity: List of (phrase, is_active) tuples from detect_phrase_activity.
+        category: The track category (e.g., "drums", "bass").
+
+    Returns:
+        List of TrackEvent objects for state changes.
+    """
+    events: list[TrackEvent] = []
+    was_active = False
+
+    for phrase, is_active in phrase_activity:
+        if is_active and not was_active:
+            events.append(
+                TrackEvent(
+                    beat=phrase.start_beats,
+                    track_name=track_name,
+                    event_type="enter",
+                    category=category,
+                )
+            )
+        elif not is_active and was_active:
+            events.append(
+                TrackEvent(
+                    beat=phrase.start_beats,
+                    track_name=track_name,
+                    event_type="exit",
+                    category=category,
+                )
+            )
+        was_active = is_active
+
+    return events
+
+
+def detect_events_from_clip_contents_phrase_aligned(
+    track_name: str,
+    clip_contents: list[MidiClipContent],
+    phrases: list[Phrase],
+) -> list[TrackEvent]:
+    """Detect track events using phrase-aligned boundaries.
+
+    Combines phrase activity detection with event generation.
+    This is the phrase-aligned replacement for detect_events_from_clip_contents.
+
+    Args:
+        track_name: Name of the track.
+        clip_contents: List of MidiClipContent for the track.
+        phrases: List of Phrase objects defining the time boundaries.
+
+    Returns:
+        List of TrackEvent objects for state changes.
+    """
+    if not clip_contents or not phrases:
+        return []
+
+    category = categorize_track(track_name)
+    phrase_activity = detect_phrase_activity(phrases, clip_contents)
+    return detect_events_from_phrase_activity(track_name, phrase_activity, category)
 
 
 def merge_events_into_phrases(

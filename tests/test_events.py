@@ -8,10 +8,12 @@ import pytest
 
 from alsmuse.events import (
     categorize_track,
+    detect_events_from_phrase_activity,
+    detect_phrase_activity,
     detect_track_events,
     merge_events_into_phrases,
 )
-from alsmuse.midi import detect_midi_activity, extract_midi_notes
+from alsmuse.midi import check_activity_in_range, detect_midi_activity, extract_midi_notes
 from alsmuse.models import Clip, MidiClipContent, MidiNote, Phrase, TrackEvent
 
 
@@ -482,6 +484,310 @@ class TestExtractMidiNotesFromXML:
         notes = extract_midi_notes(clip_elem)
 
         assert notes == ()
+
+
+class TestDetectPhraseActivity:
+    """Tests for phrase-based activity detection."""
+
+    def test_detects_activity_per_phrase(self) -> None:
+        """Activity is correctly determined for each phrase."""
+        phrases = [
+            Phrase(start_beats=0, end_beats=8, section_name="INTRO", is_section_start=True),
+            Phrase(start_beats=8, end_beats=16, section_name="...", is_section_start=False),
+            Phrase(start_beats=16, end_beats=24, section_name="VERSE", is_section_start=True),
+        ]
+        clip = Clip(name="test", start_beats=0, end_beats=24)
+        # Notes only in first and third phrases
+        notes = (
+            MidiNote(time=4.0, duration=2.0, velocity=100, pitch=60),  # In phrase 1
+            MidiNote(time=20.0, duration=2.0, velocity=100, pitch=62),  # In phrase 3
+        )
+        content = MidiClipContent(clip=clip, notes=notes)
+
+        result = detect_phrase_activity(phrases, [content])
+
+        assert len(result) == 3
+        assert result[0] == (phrases[0], True)  # First phrase has notes
+        assert result[1] == (phrases[1], False)  # Second phrase is empty
+        assert result[2] == (phrases[2], True)  # Third phrase has notes
+
+    def test_sustained_note_active_in_all_phrases(self) -> None:
+        """A note spanning multiple phrases is active in all of them."""
+        phrases = [
+            Phrase(start_beats=0, end_beats=8, section_name="INTRO", is_section_start=True),
+            Phrase(start_beats=8, end_beats=16, section_name="...", is_section_start=False),
+            Phrase(start_beats=16, end_beats=24, section_name="VERSE", is_section_start=True),
+        ]
+        clip = Clip(name="test", start_beats=0, end_beats=24)
+        # Long sustained note from beat 4 to beat 20
+        notes = (MidiNote(time=4.0, duration=16.0, velocity=100, pitch=60),)
+        content = MidiClipContent(clip=clip, notes=notes)
+
+        result = detect_phrase_activity(phrases, [content])
+
+        assert all(is_active for _, is_active in result)
+
+    def test_empty_clip_contents(self) -> None:
+        """All phrases show inactive when no clip contents."""
+        phrases = [
+            Phrase(start_beats=0, end_beats=8, section_name="INTRO", is_section_start=True),
+        ]
+
+        result = detect_phrase_activity(phrases, [])
+
+        assert result == [(phrases[0], False)]
+
+    def test_empty_phrases(self) -> None:
+        """Returns empty list when no phrases provided."""
+        clip = Clip(name="test", start_beats=0, end_beats=8)
+        notes = (MidiNote(time=2.0, duration=1.0, velocity=100, pitch=60),)
+        content = MidiClipContent(clip=clip, notes=notes)
+
+        result = detect_phrase_activity([], [content])
+
+        assert result == []
+
+
+class TestDetectEventsFromPhraseActivity:
+    """Tests for event detection from phrase activity."""
+
+    def test_enter_event_when_activity_starts(self) -> None:
+        """Generates enter event when track becomes active."""
+        phrases = [
+            Phrase(start_beats=0, end_beats=8, section_name="INTRO", is_section_start=True),
+            Phrase(start_beats=8, end_beats=16, section_name="VERSE", is_section_start=True),
+        ]
+        phrase_activity = [(phrases[0], False), (phrases[1], True)]
+
+        events = detect_events_from_phrase_activity("Drums", phrase_activity, "drums")
+
+        assert len(events) == 1
+        assert events[0].beat == 8.0  # Event at start of phrase where activity starts
+        assert events[0].event_type == "enter"
+        assert events[0].category == "drums"
+
+    def test_exit_event_when_activity_stops(self) -> None:
+        """Generates exit event when track becomes inactive."""
+        phrases = [
+            Phrase(start_beats=0, end_beats=8, section_name="INTRO", is_section_start=True),
+            Phrase(start_beats=8, end_beats=16, section_name="VERSE", is_section_start=True),
+        ]
+        phrase_activity = [(phrases[0], True), (phrases[1], False)]
+
+        events = detect_events_from_phrase_activity("Bass", phrase_activity, "bass")
+
+        # Enter at start, exit when activity stops
+        assert len(events) == 2
+        assert events[0].event_type == "enter"
+        assert events[0].beat == 0.0
+        assert events[1].event_type == "exit"
+        assert events[1].beat == 8.0
+
+    def test_no_false_events_for_continuous_activity(self) -> None:
+        """No spurious events when track plays continuously across phrases."""
+        phrases = [
+            Phrase(start_beats=0, end_beats=8, section_name="INTRO", is_section_start=True),
+            Phrase(start_beats=8, end_beats=16, section_name="VERSE", is_section_start=True),
+            Phrase(start_beats=16, end_beats=24, section_name="CHORUS", is_section_start=True),
+        ]
+        # Track plays throughout all phrases
+        phrase_activity = [(p, True) for p in phrases]
+
+        events = detect_events_from_phrase_activity("Drums", phrase_activity, "drums")
+
+        # Only one enter event at the beginning
+        assert len(events) == 1
+        assert events[0].event_type == "enter"
+        assert events[0].beat == 0.0
+
+    def test_empty_phrase_activity(self) -> None:
+        """Returns empty list for empty input."""
+        events = detect_events_from_phrase_activity("Test", [], "other")
+        assert events == []
+
+
+class TestCheckActivityInRange:
+    """Tests for the check_activity_in_range function."""
+
+    def test_detects_activity_in_single_clip(self) -> None:
+        """Detects notes within the specified range."""
+        clip = Clip(name="test", start_beats=0, end_beats=16)
+        notes = (MidiNote(time=4.0, duration=2.0, velocity=100, pitch=60),)
+        content = MidiClipContent(clip=clip, notes=notes)
+
+        assert check_activity_in_range([content], 0.0, 8.0) is True
+        assert check_activity_in_range([content], 8.0, 16.0) is False
+
+    def test_detects_activity_across_clips(self) -> None:
+        """Detects notes from any clip in the list."""
+        clip1 = Clip(name="clip1", start_beats=0, end_beats=8)
+        clip2 = Clip(name="clip2", start_beats=8, end_beats=16)
+        notes1 = (MidiNote(time=2.0, duration=1.0, velocity=100, pitch=60),)
+        notes2 = (MidiNote(time=2.0, duration=1.0, velocity=100, pitch=62),)
+        content1 = MidiClipContent(clip=clip1, notes=notes1)
+        content2 = MidiClipContent(clip=clip2, notes=notes2)
+
+        assert check_activity_in_range([content1, content2], 0.0, 8.0) is True
+        assert check_activity_in_range([content1, content2], 8.0, 16.0) is True
+
+    def test_no_activity_in_empty_clips(self) -> None:
+        """Returns False when clips have no notes."""
+        clip = Clip(name="test", start_beats=0, end_beats=16)
+        content = MidiClipContent(clip=clip, notes=())
+
+        assert check_activity_in_range([content], 0.0, 8.0) is False
+
+    def test_no_activity_in_empty_list(self) -> None:
+        """Returns False when clip list is empty."""
+        assert check_activity_in_range([], 0.0, 8.0) is False
+
+    def test_note_spanning_range_detected(self) -> None:
+        """Detects notes that span across the range boundaries."""
+        clip = Clip(name="test", start_beats=0, end_beats=24)
+        # Note from beat 4 to beat 20 - spans multiple 8-beat ranges
+        notes = (MidiNote(time=4.0, duration=16.0, velocity=100, pitch=60),)
+        content = MidiClipContent(clip=clip, notes=notes)
+
+        assert check_activity_in_range([content], 0.0, 8.0) is True
+        assert check_activity_in_range([content], 8.0, 16.0) is True
+        assert check_activity_in_range([content], 16.0, 24.0) is True
+
+    def test_range_outside_clip_boundaries(self) -> None:
+        """Returns False when range is outside clip boundaries."""
+        clip = Clip(name="test", start_beats=8, end_beats=16)
+        notes = (MidiNote(time=2.0, duration=2.0, velocity=100, pitch=60),)
+        content = MidiClipContent(clip=clip, notes=notes)
+
+        # Range before clip
+        assert check_activity_in_range([content], 0.0, 8.0) is False
+        # Range after clip
+        assert check_activity_in_range([content], 16.0, 24.0) is False
+        # Range within clip - should find the note
+        assert check_activity_in_range([content], 8.0, 16.0) is True
+
+
+class TestPhraseAlignedEventDetection:
+    """Tests for phrase-aligned event detection to prevent false events at boundaries.
+
+    These tests verify the core fix for the problem where a global grid detection
+    would generate false "exit" events when tracks play through section boundaries.
+    """
+
+    def test_no_false_exit_when_track_plays_through_sections(self) -> None:
+        """No exit event when track plays continuously across section boundaries.
+
+        This is the core test case from the design doc:
+        - VERSE1 ends at beat 60
+        - CHORUS1 starts at beat 62 (2-beat gap/transition)
+        - Drums stop at beat 58, resume at beat 62
+
+        With phrase-aligned detection, if CHORUS1's first phrase covers 62-70,
+        drums ARE active in that phrase, so no exit event should be generated.
+        """
+        # Create phrases that align with section boundaries
+        phrases = [
+            Phrase(start_beats=48, end_beats=56, section_name="VERSE1", is_section_start=True),
+            Phrase(start_beats=56, end_beats=60, section_name="...", is_section_start=False),
+            # Gap/transition from 60-62 is before CHORUS1
+            Phrase(start_beats=62, end_beats=70, section_name="CHORUS1", is_section_start=True),
+            Phrase(start_beats=70, end_beats=78, section_name="...", is_section_start=False),
+        ]
+
+        # Drum clip: active in VERSE1 (48-58), silent during gap (58-62), active in CHORUS1 (62+)
+        verse_clip = Clip(name="verse_drums", start_beats=48, end_beats=60)
+        verse_notes = (
+            MidiNote(time=0.0, duration=2.0, velocity=100, pitch=36),  # beat 48-50
+            MidiNote(time=4.0, duration=2.0, velocity=100, pitch=36),  # beat 52-54
+            MidiNote(time=8.0, duration=2.0, velocity=100, pitch=36),  # beat 56-58
+        )
+        verse_content = MidiClipContent(clip=verse_clip, notes=verse_notes)
+
+        chorus_clip = Clip(name="chorus_drums", start_beats=62, end_beats=78)
+        chorus_notes = (
+            MidiNote(time=0.0, duration=2.0, velocity=100, pitch=36),  # beat 62-64
+            MidiNote(time=4.0, duration=2.0, velocity=100, pitch=36),  # beat 66-68
+            MidiNote(time=8.0, duration=2.0, velocity=100, pitch=36),  # beat 70-72
+        )
+        chorus_content = MidiClipContent(clip=chorus_clip, notes=chorus_notes)
+
+        clip_contents = [verse_content, chorus_content]
+
+        phrase_activity = detect_phrase_activity(phrases, clip_contents)
+
+        # All phrases should show as active (drums are playing in all of them)
+        assert phrase_activity[0] == (phrases[0], True)  # VERSE1 phrase 1
+        assert phrase_activity[1] == (phrases[1], True)  # VERSE1 phrase 2 (beat 56-58)
+        assert phrase_activity[2] == (phrases[2], True)  # CHORUS1 phrase 1 (beat 62+)
+        assert phrase_activity[3] == (phrases[3], True)  # CHORUS1 phrase 2
+
+        events = detect_events_from_phrase_activity("Drums", phrase_activity, "drums")
+
+        # Should only have ONE enter event at the beginning
+        # No exit events because drums play continuously across all phrases
+        assert len(events) == 1
+        assert events[0].event_type == "enter"
+        assert events[0].beat == 48.0
+
+    def test_events_appear_in_correct_phrase(self) -> None:
+        """Events are placed at the start of the phrase where the change occurs."""
+        phrases = [
+            Phrase(start_beats=0, end_beats=8, section_name="INTRO", is_section_start=True),
+            Phrase(start_beats=8, end_beats=16, section_name="VERSE1", is_section_start=True),
+            Phrase(start_beats=16, end_beats=24, section_name="...", is_section_start=False),
+        ]
+
+        # Bass starts at VERSE1 (beat 8) and plays through beat 24
+        clip = Clip(name="bass", start_beats=8, end_beats=24)
+        notes = (
+            MidiNote(time=0.0, duration=2.0, velocity=100, pitch=36),  # beat 8-10
+            MidiNote(time=4.0, duration=2.0, velocity=100, pitch=36),  # beat 12-14
+            MidiNote(time=8.0, duration=2.0, velocity=100, pitch=36),  # beat 16-18
+            MidiNote(time=12.0, duration=2.0, velocity=100, pitch=36),  # beat 20-22
+        )
+        content = MidiClipContent(clip=clip, notes=notes)
+
+        phrase_activity = detect_phrase_activity(phrases, [content])
+
+        assert phrase_activity[0] == (phrases[0], False)  # INTRO: no bass
+        assert phrase_activity[1] == (phrases[1], True)  # VERSE1: bass playing
+        assert phrase_activity[2] == (phrases[2], True)  # Continuation: bass playing
+
+        events = detect_events_from_phrase_activity("Bass", phrase_activity, "bass")
+
+        # Bass enters at the start of VERSE1
+        assert len(events) == 1
+        assert events[0].event_type == "enter"
+        assert events[0].beat == 8.0  # Exactly at VERSE1 phrase start
+
+    def test_notes_spanning_phrase_boundaries_no_spurious_events(self) -> None:
+        """A sustained note spanning phrase boundaries doesn't generate enter/exit.
+
+        Example: A pad note from beat 4 to beat 20 spanning INTRO (0-16) into VERSE1 (16-32).
+        The pad is active in all phrases, so no spurious events.
+        """
+        phrases = [
+            Phrase(start_beats=0, end_beats=8, section_name="INTRO", is_section_start=True),
+            Phrase(start_beats=8, end_beats=16, section_name="...", is_section_start=False),
+            Phrase(start_beats=16, end_beats=24, section_name="VERSE1", is_section_start=True),
+            Phrase(start_beats=24, end_beats=32, section_name="...", is_section_start=False),
+        ]
+
+        # Sustained pad from beat 4 to beat 28
+        clip = Clip(name="pad", start_beats=0, end_beats=32)
+        notes = (MidiNote(time=4.0, duration=24.0, velocity=100, pitch=60),)
+        content = MidiClipContent(clip=clip, notes=notes)
+
+        phrase_activity = detect_phrase_activity(phrases, [content])
+
+        # Note spans beats 4-28, so all phrases should be active
+        assert all(is_active for _, is_active in phrase_activity)
+
+        events = detect_events_from_phrase_activity("Pad", phrase_activity, "pad")
+
+        # Only one enter at phrase 0 (first phrase where note is active)
+        assert len(events) == 1
+        assert events[0].event_type == "enter"
+        assert events[0].beat == 0.0
 
 
 class TestStroboscopeAvoidance:
