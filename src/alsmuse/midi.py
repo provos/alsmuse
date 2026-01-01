@@ -4,31 +4,25 @@ This module provides functions to extract MIDI notes from ALS XML elements
 and detect track activity using range-based queries.
 """
 
+from dataclasses import dataclass
 from xml.etree.ElementTree import Element
 
 from .models import Clip, MidiClipContent, MidiNote
 
 
-def extract_midi_notes(clip_element: Element) -> tuple[MidiNote, ...]:
-    """Extract all MIDI notes from a clip element.
+@dataclass(frozen=True)
+class _LoopInfo:
+    """Internal helper to hold loop settings."""
 
-    Handles both Drum Rack (KeyTracks) and standard MIDI track structures.
-    Note times are adjusted by StartRelative offset and are relative to clip start.
+    is_on: bool
+    start: float
+    end: float
+    start_relative: float
+    length: float
 
-    The StartRelative value in the Loop element indicates the offset into the
-    clip's internal content where playback begins. Notes before this offset
-    are not played, and all note times must be adjusted by subtracting this value.
 
-    When LoopOn is true and the clip length exceeds the loop region, notes within
-    the loop region are repeated to fill the clip duration.
-
-    Args:
-        clip_element: A MidiClip XML element.
-
-    Returns:
-        Tuple of MidiNote objects sorted by time.
-    """
-    # Get loop settings from Loop element
+def _extract_loop_info(clip_element: Element) -> _LoopInfo:
+    """Extract loop settings from a clip element."""
     loop_on = False
     loop_start = 0.0
     loop_end = 0.0
@@ -51,18 +45,17 @@ def extract_midi_notes(clip_element: Element) -> tuple[MidiNote, ...]:
         if start_rel_elem is not None:
             start_relative = float(start_rel_elem.get("Value", "0"))
 
-    # Get clip length from Time attribute and CurrentEnd element
-    clip_time = float(clip_element.get("Time", "0"))
-    current_end_elem = clip_element.find("CurrentEnd")
-    clip_end = (
-        float(current_end_elem.get("Value", str(clip_time)))
-        if current_end_elem is not None
-        else clip_time
+    return _LoopInfo(
+        is_on=loop_on,
+        start=loop_start,
+        end=loop_end,
+        start_relative=start_relative,
+        length=loop_end - loop_start,
     )
-    clip_length = clip_end - clip_time
 
-    loop_length = loop_end - loop_start
 
+def _extract_raw_notes(clip_element: Element, start_relative: float) -> list[MidiNote]:
+    """Extract raw notes from clip using both strategies."""
     base_notes: list[MidiNote] = []
 
     # Strategy 1: KeyTracks structure (Drum Racks, most MIDI clips)
@@ -94,7 +87,6 @@ def extract_midi_notes(clip_element: Element) -> tuple[MidiNote, ...]:
             )
 
     # Strategy 2: Fallback - find any MidiNoteEvent not already captured
-    # This handles edge cases in XML structure variations
     if not base_notes:
         for note_event in clip_element.findall(".//MidiNoteEvent"):
             if note_event.get("IsEnabled") == "false":
@@ -119,36 +111,84 @@ def extract_midi_notes(clip_element: Element) -> tuple[MidiNote, ...]:
                 )
             )
 
-    # Expand notes if looping is enabled and clip is longer than loop region
-    if loop_on and loop_length > 0 and clip_length > loop_length:
-        expanded_notes: list[MidiNote] = []
+    return base_notes
 
-        # Only notes within the loop region (time >= 0 and time < loop_length) repeat
-        loopable_notes = [n for n in base_notes if 0 <= n.time < loop_length]
 
-        # Notes outside the loop region play once at their original time
-        non_loopable_notes = [n for n in base_notes if n.time >= loop_length]
+def _expand_looped_notes(
+    base_notes: list[MidiNote],
+    loop_info: _LoopInfo,
+    clip_length: float,
+) -> list[MidiNote]:
+    """Expand notes based on loop settings."""
+    expanded_notes: list[MidiNote] = []
 
-        # Repeat loopable notes to fill the clip duration
-        repetition = 0
-        while repetition * loop_length < clip_length:
-            offset = repetition * loop_length
-            for note in loopable_notes:
-                new_time = note.time + offset
-                if new_time < clip_length:
-                    expanded_notes.append(
-                        MidiNote(
-                            time=new_time,
-                            duration=note.duration,
-                            velocity=note.velocity,
-                            pitch=note.pitch,
-                        )
+    # Only notes within the loop region (time >= 0 and time < loop_length) repeat
+    # Note: time is already adjusted by start_relative, so 0 is the start of the loop
+    loopable_notes = [n for n in base_notes if 0 <= n.time < loop_info.length]
+
+    # Notes outside the loop region play once at their original time
+    non_loopable_notes = [n for n in base_notes if n.time >= loop_info.length]
+
+    # Repeat loopable notes to fill the clip duration
+    repetition = 0
+    while repetition * loop_info.length < clip_length:
+        offset = repetition * loop_info.length
+        for note in loopable_notes:
+            new_time = note.time + offset
+            if new_time < clip_length:
+                expanded_notes.append(
+                    MidiNote(
+                        time=new_time,
+                        duration=note.duration,
+                        velocity=note.velocity,
+                        pitch=note.pitch,
                     )
-            repetition += 1
+                )
+        repetition += 1
 
-        # Add non-loopable notes (they play once at their original position)
-        expanded_notes.extend(non_loopable_notes)
+    # Add non-loopable notes (they play once at their original position)
+    expanded_notes.extend(non_loopable_notes)
+    return expanded_notes
 
+
+def extract_midi_notes(clip_element: Element) -> tuple[MidiNote, ...]:
+    """Extract all MIDI notes from a clip element.
+
+    Handles both Drum Rack (KeyTracks) and standard MIDI track structures.
+    Note times are adjusted by StartRelative offset and are relative to clip start.
+
+    The StartRelative value in the Loop element indicates the offset into the
+    clip's internal content where playback begins. Notes before this offset
+    are not played, and all note times must be adjusted by subtracting this value.
+
+    When LoopOn is true and the clip length exceeds the loop region, notes within
+    the loop region are repeated to fill the clip duration.
+
+    Args:
+        clip_element: A MidiClip XML element.
+
+    Returns:
+        Tuple of MidiNote objects sorted by time.
+    """
+    # 1. Extract loop settings
+    loop_info = _extract_loop_info(clip_element)
+
+    # 2. Get clip length
+    clip_time = float(clip_element.get("Time", "0"))
+    current_end_elem = clip_element.find("CurrentEnd")
+    clip_end = (
+        float(current_end_elem.get("Value", str(clip_time)))
+        if current_end_elem is not None
+        else clip_time
+    )
+    clip_length = clip_end - clip_time
+
+    # 3. Extract raw notes (adjusted by start_relative)
+    base_notes = _extract_raw_notes(clip_element, loop_info.start_relative)
+
+    # 4. Expand if looping is enabled and relevant
+    if loop_info.is_on and loop_info.length > 0 and clip_length > loop_info.length:
+        expanded_notes = _expand_looped_notes(base_notes, loop_info, clip_length)
         return tuple(sorted(expanded_notes, key=lambda n: n.time))
 
     return tuple(sorted(base_notes, key=lambda n: n.time))
