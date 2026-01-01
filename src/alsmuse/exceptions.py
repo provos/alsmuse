@@ -28,3 +28,14 @@ class TrackNotFoundError(ALSmuseError):
     Raised when attempting to find a track by name that
     does not exist in the parsed LiveSet.
     """
+
+
+class AlignmentError(ALSmuseError):
+    """Raised when lyrics alignment fails.
+
+    This can occur when:
+    - The stable-ts package is not installed
+    - Audio files cannot be loaded
+    - The alignment model fails to process the audio
+    - No valid words are produced from alignment
+    """

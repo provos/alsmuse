@@ -13,6 +13,13 @@ dependencies = [
     "plotly>=5.18.0",
 ]
 
+[project.optional-dependencies]
+align = [
+    "stable-ts>=2.16.0",
+    "soundfile>=0.13.1",
+    "questionary>=2.1.1",
+]
+
 [project.scripts]
 alsmuse = "alsmuse.cli:main"
 

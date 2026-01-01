@@ -6,6 +6,7 @@ from pathlib import Path
 import click
 
 from .analyze import analyze_als_v2
+from .audio import check_alignment_dependencies
 from .exceptions import ParseError, TrackNotFoundError
 
 
@@ -40,28 +41,75 @@ def main() -> None:
     default=None,
     help="Path to lyrics file with [SECTION] headers.",
 )
+@click.option(
+    "--align-vocals",
+    is_flag=True,
+    help="Use forced alignment for precise lyrics timing (requires stable-ts).",
+)
+@click.option(
+    "--vocal-track",
+    type=str,
+    multiple=True,
+    help="Specific vocal track(s) to use. Can be repeated.",
+)
+@click.option(
+    "--all-vocals",
+    is_flag=True,
+    help="Use all detected vocal tracks without prompting.",
+)
 def analyze(
     als_file: Path,
     structure_track: str,
     phrase_bars: int,
     show_events: bool,
     lyrics: Path | None,
+    align_vocals: bool,
+    vocal_track: tuple[str, ...],
+    all_vocals: bool,
 ) -> None:
     """Analyze an Ableton Live Set file.
 
     Outputs phrase-level chunks of N bars each (default: 2 bars).
     Track enter/exit events are detected by default.
     Use --no-events to disable event detection.
+
+    When --align-vocals is specified, lyrics are aligned to audio using
+    forced alignment with stable-ts. This requires the alignment dependencies
+    to be installed (pip install 'alsmuse[align]').
     """
+    # Validate alignment options
+    if align_vocals:
+        # Check that lyrics is provided first (before checking dependencies)
+        if lyrics is None:
+            click.echo(
+                "Error: --align-vocals requires --lyrics to be specified.",
+                err=True,
+            )
+            sys.exit(1)
+
+        # Then check for required dependencies
+        errors = check_alignment_dependencies()
+        if errors:
+            for err in errors:
+                click.echo(f"Error: {err}", err=True)
+            sys.exit(1)
+
     try:
         # Convert bars to beats (assuming 4/4 time)
         beats_per_phrase = phrase_bars * 4
+
+        # Convert vocal_track tuple to None if empty
+        vocal_tracks = vocal_track if vocal_track else None
+
         result = analyze_als_v2(
             als_file,
             structure_track,
             beats_per_phrase,
             show_events=show_events,
             lyrics_path=lyrics,
+            align_vocals=align_vocals,
+            vocal_tracks=vocal_tracks,
+            use_all_vocals=all_vocals,
         )
         click.echo(result)
     except ParseError as e:

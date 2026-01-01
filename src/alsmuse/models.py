@@ -5,6 +5,7 @@ analyzing Ableton Live Set files and extracting music structure.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 
@@ -230,3 +231,63 @@ class Phrase:
             Duration in seconds.
         """
         return (self.end_beats - self.start_beats) * 60 / bpm
+
+
+@dataclass(frozen=True)
+class AudioClipRef:
+    """Reference to an audio file with timeline position.
+
+    Used for extracting audio clips from ALS files for vocal alignment.
+
+    Attributes:
+        track_name: Name of the containing track.
+        file_path: Resolved path to the audio file.
+        start_beats: Start position on timeline in beats.
+        end_beats: End position on timeline in beats.
+        start_seconds: Start position in seconds (computed from BPM).
+        end_seconds: End position in seconds (computed from BPM).
+    """
+
+    track_name: str
+    file_path: Path
+    start_beats: float
+    end_beats: float
+    start_seconds: float
+    end_seconds: float
+
+
+@dataclass(frozen=True)
+class TimedWord:
+    """A word with start and end timestamps in seconds.
+
+    Used for forced alignment of lyrics to audio.
+
+    Attributes:
+        text: The word text.
+        start: Start timestamp in seconds.
+        end: End timestamp in seconds.
+    """
+
+    text: str
+    start: float  # seconds
+    end: float  # seconds
+
+
+@dataclass(frozen=True)
+class TimedLine:
+    """A line of lyrics with timing derived from word timestamps.
+
+    Groups words back into the original line structure while
+    preserving word-level timing information.
+
+    Attributes:
+        text: The full line text.
+        start: Start timestamp in seconds (from first word).
+        end: End timestamp in seconds (from last word).
+        words: Tuple of TimedWord objects in this line.
+    """
+
+    text: str
+    start: float  # seconds (from first word)
+    end: float  # seconds (from last word)
+    words: tuple[TimedWord, ...]
