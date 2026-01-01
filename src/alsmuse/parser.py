@@ -18,6 +18,98 @@ from .exceptions import ParseError
 from .models import Clip, LiveSet, Tempo, Track
 
 
+def parse_als_xml(path: Path) -> Element:
+    """Parse an Ableton Live Set file and return the XML root element.
+
+    This provides access to the raw XML for advanced analysis like
+    MIDI note extraction.
+
+    Args:
+        path: Path to the .als file to parse.
+
+    Returns:
+        The root XML Element.
+
+    Raises:
+        ParseError: If the file cannot be read, decompressed, or parsed.
+    """
+    xml_bytes = _decompress_als(path)
+
+    try:
+        root = ET.fromstring(xml_bytes)
+    except XMLParseError as e:
+        raise ParseError(f"Invalid XML in ALS file: {e}") from e
+
+    return root
+
+
+def get_track_elements(root: Element) -> list[tuple[Element, str]]:
+    """Get all track elements with their types from a parsed ALS XML root.
+
+    Args:
+        root: The root XML element from parse_als_xml.
+
+    Returns:
+        List of (track_element, track_type) tuples where track_type is
+        "midi" or "audio".
+
+    Raises:
+        ParseError: If the Tracks element is missing.
+    """
+    live_set_elem = root.find("LiveSet")
+    if live_set_elem is None:
+        raise ParseError("Missing LiveSet element in ALS file")
+
+    tracks_elem = live_set_elem.find("Tracks")
+    if tracks_elem is None:
+        raise ParseError("Missing Tracks element in ALS file")
+
+    result: list[tuple[Element, str]] = []
+
+    for midi_track in tracks_elem.findall("MidiTrack"):
+        result.append((midi_track, "midi"))
+
+    for audio_track in tracks_elem.findall("AudioTrack"):
+        result.append((audio_track, "audio"))
+
+    return result
+
+
+def extract_track_name(track_element: Element) -> str:
+    """Extract track name from a track element.
+
+    Public wrapper around _extract_track_name for use in MIDI extraction.
+
+    Args:
+        track_element: A MidiTrack or AudioTrack XML element.
+
+    Returns:
+        The track name.
+
+    Raises:
+        ParseError: If neither UserName nor EffectiveName can be found.
+    """
+    return _extract_track_name(track_element)
+
+
+def extract_track_clips(
+    track_element: Element,
+    track_type: str,
+) -> tuple[Clip, ...]:
+    """Extract clips from a track element.
+
+    Public wrapper around _extract_clips for use in MIDI extraction.
+
+    Args:
+        track_element: A MidiTrack or AudioTrack XML element.
+        track_type: Either "midi" or "audio".
+
+    Returns:
+        Tuple of Clip objects.
+    """
+    return _extract_clips(track_element, "midi" if track_type == "midi" else "audio")
+
+
 def parse_als_file(path: Path) -> LiveSet:
     """Parse an Ableton Live Set file into a LiveSet model.
 

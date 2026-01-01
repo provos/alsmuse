@@ -84,9 +84,7 @@ class StructureTrackExtractor:
         for track in live_set.tracks:
             if track.name.lower() == target_lower:
                 return track
-        raise TrackNotFoundError(
-            f"Track '{self._track_name}' not found in LiveSet"
-        )
+        raise TrackNotFoundError(f"Track '{self._track_name}' not found in LiveSet")
 
     @staticmethod
     def _clip_to_section(clip: Clip) -> Section:

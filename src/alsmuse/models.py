@@ -93,3 +93,140 @@ class Section:
             End position in seconds.
         """
         return self.end_beats * 60 / bpm
+
+
+@dataclass(frozen=True)
+class MidiNote:
+    """A single MIDI note event.
+
+    Represents a MIDI note with timing, duration, velocity, and pitch.
+    Times are relative to the containing clip start.
+
+    Attributes:
+        time: Beat position relative to clip start.
+        duration: Note duration in beats.
+        velocity: MIDI velocity (0-127).
+        pitch: MIDI note number (0-127).
+    """
+
+    time: float
+    duration: float
+    velocity: int
+    pitch: int
+
+
+@dataclass(frozen=True)
+class MidiClipContent:
+    """Content of a MIDI clip including notes.
+
+    Associates a clip with its MIDI note data for activity detection.
+
+    Attributes:
+        clip: The parent Clip containing timing information.
+        notes: Tuple of MidiNote objects within this clip.
+    """
+
+    clip: Clip
+    notes: tuple[MidiNote, ...]
+
+    def has_notes_in_range(self, start: float, end: float) -> bool:
+        """Check if any notes are active within the given range.
+
+        A note is considered active in the range if it overlaps with the
+        range in any way (starts within, ends within, or spans the range).
+
+        This uses range queries rather than point sampling to avoid the
+        "stroboscope" problem where off-beat notes would be missed.
+
+        Args:
+            start: Start of range in beats (relative to clip).
+            end: End of range in beats (relative to clip).
+
+        Returns:
+            True if any note is active within the range.
+        """
+        for note in self.notes:
+            note_start = note.time
+            note_end = note.time + note.duration
+            # Check for any overlap between note and range
+            if note_start < end and note_end > start:
+                return True
+        return False
+
+    def note_density(self) -> float:
+        """Calculate notes per beat indicating activity level.
+
+        Returns:
+            Notes per beat, or 0.0 if clip has no duration.
+        """
+        if not self.notes:
+            return 0.0
+        duration = self.clip.end_beats - self.clip.start_beats
+        return len(self.notes) / duration if duration > 0 else 0.0
+
+
+@dataclass(frozen=True)
+class TrackEvent:
+    """A significant change in track activity.
+
+    Represents an enter or exit event for a track, indicating when
+    an instrument or sound starts or stops playing in the arrangement.
+
+    Attributes:
+        beat: The beat position where the event occurs.
+        track_name: Name of the track that generated this event.
+        event_type: Either "enter" (starts playing) or "exit" (stops playing).
+        category: The instrument category (e.g., "drums", "bass", "vocals").
+    """
+
+    beat: float
+    track_name: str
+    event_type: Literal["enter", "exit"]
+    category: str
+
+
+@dataclass(frozen=True)
+class Phrase:
+    """A time slice with associated events and metadata.
+
+    Phrases represent fixed-duration chunks of the arrangement, typically
+    2 bars (8 beats in 4/4 time). They are used for generating detailed
+    A/V scripts with per-phrase event information.
+
+    Attributes:
+        start_beats: Start position in beats.
+        end_beats: End position in beats.
+        section_name: Name of the containing section, or "..." for continuation.
+        is_section_start: True if this phrase starts a new section.
+        events: Tuple of track events occurring within this phrase.
+        lyric: Optional lyric text for this phrase.
+    """
+
+    start_beats: float
+    end_beats: float
+    section_name: str
+    is_section_start: bool
+    events: tuple[TrackEvent, ...] = ()
+    lyric: str = ""
+
+    def start_time(self, bpm: float) -> float:
+        """Convert start position to seconds.
+
+        Args:
+            bpm: Beats per minute for time conversion.
+
+        Returns:
+            Start position in seconds.
+        """
+        return self.start_beats * 60 / bpm
+
+    def duration_seconds(self, bpm: float) -> float:
+        """Calculate phrase duration in seconds.
+
+        Args:
+            bpm: Beats per minute for time conversion.
+
+        Returns:
+            Duration in seconds.
+        """
+        return (self.end_beats - self.start_beats) * 60 / bpm
