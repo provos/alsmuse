@@ -109,14 +109,15 @@ def format_phrase_table(
 ) -> str:
     """Format phrases as a markdown A/V table.
 
-    Creates a markdown table with Time, Cue, and optionally Events and Lyrics
-    columns. The Video column is left empty for users to fill in later.
+    Creates a markdown table with Time, Audio, and Video columns.
+    The Audio column combines section cue, events, and lyrics using <br> tags.
+    The Video column is left empty for users to fill in later.
 
     Args:
         phrases: List of phrases to format.
         bpm: Beats per minute for time conversion.
-        show_events: Whether to include the Events column.
-        show_lyrics: Whether to include the Lyrics column.
+        show_events: Whether to include events in the Audio column.
+        show_lyrics: Whether to include lyrics in the Audio column.
 
     Returns:
         Markdown formatted table as a string.
@@ -130,40 +131,38 @@ def format_phrase_table(
         ...            is_section_start=False),
         ... ]
         >>> print(format_phrase_table(phrases, bpm=120, show_events=False))
-        | Time | Cue | Video |
-        |------|-----|-------|
-        | 0:00 | INTRO | |
-        | 0:04 | ... | |
+        | Time | Audio | Video |
+        |------|-------|-------|
+        | 0:00 | INTRO |  |
+        | 0:04 | ... |  |
     """
-    # Build header based on options
-    headers = ["Time", "Cue"]
-    if show_events:
-        headers.append("Events")
-    if show_lyrics:
-        headers.append("Lyrics")
-    headers.append("Video")
-
     # Create header row and separator
     lines = [
-        "| " + " | ".join(headers) + " |",
-        "|" + "|".join("------" for _ in headers) + "|",
+        "| Time | Audio | Video |",
+        "|------|-------|-------|",
     ]
 
     for phrase in phrases:
         time_str = format_time(phrase.start_time(bpm))
-        cue = phrase.section_name
 
-        row = [time_str, cue]
+        # Build audio content with <br> separators
+        audio_parts: list[str] = []
 
+        # Always include the cue/section name
+        audio_parts.append(f"**{phrase.section_name}**")
+
+        # Add events if enabled and present
         if show_events:
             events_str = format_events(phrase.events)
-            row.append(events_str)
+            if events_str:
+                audio_parts.append(events_str)
 
-        if show_lyrics:
-            row.append(f'"{phrase.lyric}"' if phrase.lyric else "")
+        # Add lyrics if enabled and present
+        if show_lyrics and phrase.lyric:
+            audio_parts.append(f'*"{phrase.lyric}"*')
 
-        row.append("")  # Empty Video column
+        audio_cell = "<br>".join(audio_parts)
 
-        lines.append("| " + " | ".join(row) + " |")
+        lines.append(f"| {time_str} | {audio_cell} |  |")
 
     return "\n".join(lines)

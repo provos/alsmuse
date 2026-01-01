@@ -267,15 +267,14 @@ class TestAnalyzeAlsV2:
         assert "enters" not in result
 
     def test_output_format_has_correct_columns(self, tmp_path: Path) -> None:
-        """Output has Time, Cue, Events, and Video columns."""
+        """Output has Time, Audio, and Video columns."""
         als_file = create_als_file(tmp_path, ALS_WITH_MIDI_TRACK)
 
         result = analyze_als_v2(als_file, beats_per_phrase=8, show_events=True)
 
         header_line = result.split("\n")[0]
         assert "Time" in header_line
-        assert "Cue" in header_line
-        assert "Events" in header_line
+        assert "Audio" in header_line
         assert "Video" in header_line
 
 
@@ -293,7 +292,8 @@ class TestLyricsIntegration:
             als_file, beats_per_phrase=8, show_events=False, lyrics_path=lyrics_file
         )
 
-        assert "Lyrics" in result
+        # Lyrics appear in the Audio column (combined with section cue)
+        assert "Audio" in result
         assert "First verse line" in result
 
     def test_lyrics_distributed_across_section(self, tmp_path: Path) -> None:
@@ -339,10 +339,11 @@ class TestLyricsIntegration:
             als_file, beats_per_phrase=8, show_events=True, lyrics_path=lyrics_file
         )
 
-        # Should have both columns
-        assert "Events" in result
-        assert "Lyrics" in result
+        # Events and lyrics appear in the Audio column (combined with <br>)
+        assert "Audio" in result
         assert "Verse with events" in result
+        # Events are included (via format_events)
+        assert "enters" in result or "exits" in result or "VERSE1" in result
 
 
 class TestEdgeCases:
@@ -880,7 +881,7 @@ class TestCLIOptions:
 
         # Verify the file contains the markdown table
         content = output_file.read_text()
-        assert "Cue" in content  # Table should have Cue column
+        assert "Audio" in content  # Table should have Audio column
         assert "Time" in content  # Table should have Time column
 
 
@@ -930,8 +931,8 @@ class TestTimestampedLyricsBypassAlignment:
         # Lyrics should appear in output (from timestamps, not alignment)
         assert "First verse line" in result
         assert "Second verse line" in result
-        # Verify lyrics column is present
-        assert "Lyrics" in result
+        # Verify Audio column is present (lyrics are now combined into Audio)
+        assert "Audio" in result
 
     def test_simple_timed_lyrics_bypass_alignment(self, tmp_path: Path) -> None:
         """Simple timed lyrics do not trigger alignment.
