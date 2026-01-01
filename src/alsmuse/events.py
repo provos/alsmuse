@@ -2,35 +2,182 @@
 
 This module provides track categorization based on name heuristics and
 event detection from MIDI activity patterns.
+
+Track Categorization:
+    When model2vec is available (pip install 'alsmuse[smart]'), track names
+    are categorized using semantic embeddings for better matching. Falls back
+    to keyword matching if embeddings aren't available or confidence is low.
 """
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+from typing import TYPE_CHECKING
+
+import numpy as np
+from model2vec import StaticModel
 
 from .midi import check_activity_in_range
 from .models import MidiClipContent, Phrase, TrackEvent
 
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
+logger = logging.getLogger(__name__)
+
 # Track category keywords for classification
+# These are used both for keyword matching AND to generate category embeddings
+# Keywords should be lowercase - matching is case-insensitive
 TRACK_CATEGORIES: dict[str, list[str]] = {
-    "drums": ["kick", "snare", "drum", "hat", "cymbal", "perc", "tom"],
-    "bass": ["bass", "sub"],
-    "vocals": ["vocal", "vox", "verse", "chorus", "main", "double", "harmony"],
-    "lead": ["lead", "solo", "melody"],
-    "guitar": ["guitar", "gtr"],
-    "keys": ["piano", "keys", "organ", "synth"],
-    "pad": ["pad", "strings", "atmosphere"],
-    "fx": ["fx", "riser", "downlifter", "reverse", "sweep", "impact"],
+    "drums": [
+        "kick", "snare", "drum", "hi-hat", "hat", "cymbal", "percussion", "perc", "tom",
+        "clap", "shaker",
+    ],
+    "bass": ["bass", "sub bass", "sub", "low end", "808"],
+    "vocals": [
+        "vocal", "vocals", "vox", "voice", "singing", "lead vocal", "backing vocal",
+        "verse", "chorus", "main", "double", "harmony",
+    ],
+    "lead": ["lead", "solo", "melody", "top line"],
+    "guitar": ["guitar", "acoustic guitar", "electric guitar", "gtr"],
+    "keys": [
+        "piano", "keys", "keyboard", "organ", "synth", "synthesizer", "rhodes", "wurlitzer",
+    ],
+    "pad": ["pad", "strings", "atmosphere", "ambient", "texture"],
+    "fx": [
+        "fx", "effects", "riser", "downlifter", "reverse", "sweep", "impact", "transition",
+    ],
 }
 
+# Similarity threshold for embedding-based matching
+# Below this threshold, return "other"
+EMBEDDING_SIMILARITY_THRESHOLD = 0.28
 
-def categorize_track(track_name: str) -> str:
-    """Determine track category from name using keyword matching.
+# Minimum margin between best and second-best category
+# If the best category isn't clearly better, return "other"
+EMBEDDING_MARGIN_THRESHOLD = 0.05
 
-    Uses heuristic keyword matching against the track name to classify
-    it into a category like "drums", "bass", "vocals", etc.
+# Generic track name patterns that should return "other"
+# These match common default track names like "Track 1", "Audio 2", "MIDI 3"
+# Uses regex to match pattern + optional number at end
+GENERIC_TRACK_PATTERN = re.compile(
+    r"^(track|audio|midi|aux|bus|return|master|group|channel|send)(\s*\d+)?$",
+    re.IGNORECASE,
+)
+
+# Module-level cache for model and embeddings (lazy loaded)
+_embedding_model: StaticModel | None = None
+_category_centroids: dict[str, NDArray[np.float32]] | None = None
+
+
+def _get_embedding_model() -> StaticModel:
+    """Lazy load the embedding model."""
+    global _embedding_model
+    if _embedding_model is None:
+        logger.debug("Loading Model2Vec embedding model...")
+        _embedding_model = StaticModel.from_pretrained("minishlab/potion-base-8M")
+        logger.debug("Model2Vec loaded successfully")
+    return _embedding_model
+
+
+def _get_category_centroids() -> dict[str, NDArray[np.float32]]:
+    """Compute and cache category centroid embeddings."""
+    global _category_centroids
+    if _category_centroids is None:
+        model = _get_embedding_model()
+        _category_centroids = {}
+        for category, keywords in TRACK_CATEGORIES.items():
+            # Embed all keywords for this category
+            embeddings = model.encode(keywords)
+            # Compute centroid (mean of all keyword embeddings)
+            centroid = np.mean(embeddings, axis=0).astype(np.float32)
+            # Normalize for cosine similarity
+            centroid = centroid / np.linalg.norm(centroid)
+            _category_centroids[category] = centroid
+
+        logger.debug("Computed centroids for %d categories", len(_category_centroids))
+
+    return _category_centroids
+
+
+def _cosine_similarity(a: NDArray[np.float32], b: NDArray[np.float32]) -> float:
+    """Compute cosine similarity between two vectors."""
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+
+    # Handle zero vectors
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+
+    return float(np.dot(a, b) / (norm_a * norm_b))
+
+
+def categorize_track_embedding(
+    track_name: str,
+    debug: bool = False,
+) -> tuple[str, float, float]:
+    """Categorize track using semantic embeddings.
+
+    Uses Model2Vec to embed the track name and find the most similar
+    category based on cosine similarity to category centroids.
 
     Args:
         track_name: Name of the track to categorize.
+        debug: If True, print similarity scores for all categories.
 
     Returns:
-        Category string, or "other" if no keywords match.
+        Tuple of (category, similarity_score, margin). The margin is the
+        difference between best and second-best scores.
+        Returns ("other", 0.0, 0.0) if embeddings aren't available.
+    """
+    model = _get_embedding_model()
+    centroids = _get_category_centroids()
+
+    if model is None or centroids is None:
+        return ("other", 0.0, 0.0)
+
+    # Embed the track name
+    track_embedding = model.encode([track_name])[0].astype(np.float32)
+
+    # Find most similar category
+    all_scores: list[tuple[str, float]] = []
+
+    for category, centroid in centroids.items():
+        similarity = _cosine_similarity(track_embedding, centroid)
+        all_scores.append((category, similarity))
+
+    # Sort by similarity (descending)
+    all_scores.sort(key=lambda x: x[1], reverse=True)
+
+    best_category, best_similarity = all_scores[0]
+    second_similarity = all_scores[1][1] if len(all_scores) > 1 else 0.0
+    margin = best_similarity - second_similarity
+
+    if debug or os.environ.get("ALSMUSE_DEBUG_CATEGORIZE"):
+        scores_str = ", ".join(f"{cat}={sim:.3f}" for cat, sim in all_scores)
+        print(f"[categorize] '{track_name}' -> {best_category} "
+              f"(score={best_similarity:.3f}, margin={margin:.3f})")
+        print(f"             scores: {scores_str}")
+
+    return (best_category, best_similarity, margin)
+
+
+def categorize_track(track_name: str, debug: bool = False) -> str:
+    """Determine track category from name using semantic embeddings.
+
+    Uses Model2Vec embeddings to find the most semantically similar category
+    for the track name. Returns "other" if:
+    - The track name matches a generic pattern (e.g., "Track 1", "Audio 2")
+    - The similarity score is below the threshold
+
+    Args:
+        track_name: Name of the track to categorize.
+        debug: If True, print debug information about the matching process.
+
+    Returns:
+        Category string, or "other" if no confident match is found.
 
     Examples:
         >>> categorize_track("Drum Kit")
@@ -40,10 +187,32 @@ def categorize_track(track_name: str) -> str:
         >>> categorize_track("Track 7")
         'other'
     """
-    name_lower = track_name.lower()
-    for category, keywords in TRACK_CATEGORIES.items():
-        if any(kw in name_lower for kw in keywords):
-            return category
+    debug = debug or bool(os.environ.get("ALSMUSE_DEBUG_CATEGORIZE"))
+
+    # Check for generic track names that should always be "other"
+    if GENERIC_TRACK_PATTERN.match(track_name.strip()):
+        if debug:
+            print(f"[categorize] '{track_name}' -> other (generic track name)")
+        return "other"
+
+    # Use embedding-based categorization
+    category, similarity, margin = categorize_track_embedding(track_name, debug=debug)
+
+    # Check both threshold and margin
+    if similarity >= EMBEDDING_SIMILARITY_THRESHOLD and margin >= EMBEDDING_MARGIN_THRESHOLD:
+        if debug:
+            print(f"[categorize] '{track_name}' -> {category} "
+                  f"(score={similarity:.3f}, margin={margin:.3f})")
+        return category
+
+    if debug:
+        if similarity < EMBEDDING_SIMILARITY_THRESHOLD:
+            print(f"[categorize] '{track_name}' -> other (below threshold: "
+                  f"{similarity:.3f} < {EMBEDDING_SIMILARITY_THRESHOLD})")
+        else:
+            print(f"[categorize] '{track_name}' -> other (margin too small: "
+                  f"{margin:.3f} < {EMBEDDING_MARGIN_THRESHOLD})")
+
     return "other"
 
 

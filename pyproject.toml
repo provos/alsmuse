@@ -11,19 +11,11 @@ dependencies = [
     "numpy>=1.26.0",
     "matplotlib>=3.8.0",
     "plotly>=5.18.0",
-]
-
-[project.optional-dependencies]
-align = [
+    "model2vec>=0.4.0",
     "stable-ts>=2.16.0",
     "soundfile>=0.13.1",
     "questionary>=2.1.1",
-]
-# For fast transcription on Apple Silicon Macs
-align-mlx = [
     "mlx-whisper>=0.4.0",
-    "soundfile>=0.13.1",
-    "questionary>=2.1.1",
 ]
 
 [project.scripts]
