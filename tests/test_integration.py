@@ -845,6 +845,44 @@ class TestCLIOptions:
         assert "--save-lyrics" in result.output
         assert "transcribed lyrics" in result.output.lower()
 
+    def test_cli_accepts_output_option(self) -> None:
+        """CLI accepts --output / -o option."""
+        from click.testing import CliRunner
+
+        from alsmuse.cli import analyze
+
+        runner = CliRunner()
+        result = runner.invoke(analyze, ["--help"])
+
+        assert "--output" in result.output or "-o" in result.output
+        assert "markdown table" in result.output.lower()
+
+    def test_cli_output_writes_to_file(self, tmp_path: Path) -> None:
+        """--output option writes the A/V table to file."""
+        from click.testing import CliRunner
+
+        from alsmuse.cli import main
+
+        runner = CliRunner()
+
+        # Create a minimal ALS file
+        als_file = create_als_file(tmp_path, MINIMAL_ALS_XML)
+        output_file = tmp_path / "av_table.md"
+
+        # Run with --output option
+        result = runner.invoke(
+            main, ["analyze", str(als_file), "--output", str(output_file)]
+        )
+
+        assert result.exit_code == 0
+        assert output_file.exists()
+        assert "A/V table saved to:" in result.output
+
+        # Verify the file contains the markdown table
+        content = output_file.read_text()
+        assert "Cue" in content  # Table should have Cue column
+        assert "Time" in content  # Table should have Time column
+
 
 # ---------------------------------------------------------------------------
 # Phase 3 Tests: Timestamped Lyrics Bypass Alignment
@@ -987,48 +1025,37 @@ class TestLanguageAndModelPassing:
 
     def test_language_option_passed_to_transcribe(self) -> None:
         """--language option is passed to transcribe_lyrics function."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
-        # Create mock model and result
-        mock_word = MagicMock()
-        mock_word.word = "hola"
-        mock_word.start = 1.0
-        mock_word.end = 1.5
+        from alsmuse.models import TimedSegment, TimedWord
 
-        mock_segment = MagicMock()
-        mock_segment.words = [mock_word]
-        mock_segment.text = "hola"
-        mock_segment.start = 1.0
-        mock_segment.end = 1.5
+        # Mock _transcribe_single_segment to capture language argument
+        expected_segment = TimedSegment(
+            text="hola",
+            start=1.0,
+            end=1.5,
+            words=(TimedWord(text="hola", start=1.0, end=1.5),),
+        )
 
-        mock_result = MagicMock()
-        mock_result.segments = [mock_segment]
+        mock_audio_segments = [(Path("/fake/segment_0.wav"), 0.0, 5.0)]
+        captured_calls: list[dict] = []
 
-        mock_model = MagicMock()
-        mock_model.transcribe.return_value = mock_result
+        def mock_transcribe(audio_path, language, model_size, time_offset):
+            captured_calls.append({
+                "language": language,
+                "model_size": model_size,
+                "time_offset": time_offset,
+            })
+            return [expected_segment]
 
-        mock_stable_whisper = MagicMock()
-        mock_stable_whisper.load_model.return_value = mock_model
-
-        mock_torch = MagicMock()
-        mock_torch.cuda.is_available.return_value = False
-        mock_torch.backends.mps.is_available.return_value = False
-
-        # Mock mlx_whisper to not be available, so stable_whisper is used
-        with patch.dict(
-            "sys.modules",
-            {
-                "stable_whisper": mock_stable_whisper,
-                "torch": mock_torch,
-                "mlx_whisper": None,
-            },
+        with (
+            patch("alsmuse.audio.split_audio_on_silence", return_value=mock_audio_segments),
+            patch(
+                "alsmuse.lyrics_align._transcribe_single_segment",
+                side_effect=mock_transcribe,
+            ),
         ):
-            import importlib
-            from pathlib import Path
-
             from alsmuse import lyrics_align
-
-            importlib.reload(lyrics_align)
 
             # Call transcribe_lyrics with Spanish language
             lyrics_align.transcribe_lyrics(
@@ -1038,55 +1065,43 @@ class TestLanguageAndModelPassing:
                 model_size="base",
             )
 
-        # Verify transcribe was called with language="es"
-        mock_model.transcribe.assert_called_once()
-        call_kwargs = mock_model.transcribe.call_args[1]
-        assert call_kwargs["language"] == "es"
+        # Verify _transcribe_single_segment was called with language="es"
+        assert len(captured_calls) == 1
+        assert captured_calls[0]["language"] == "es"
 
     def test_model_size_option_passed_to_load_model(self) -> None:
-        """--whisper-model option is passed to load_model function."""
-        from unittest.mock import MagicMock, patch
+        """--whisper-model option is passed to transcription functions."""
+        from unittest.mock import patch
 
-        # Create mock model and result
-        mock_word = MagicMock()
-        mock_word.word = "test"
-        mock_word.start = 1.0
-        mock_word.end = 1.5
+        from alsmuse.models import TimedSegment, TimedWord
 
-        mock_segment = MagicMock()
-        mock_segment.words = [mock_word]
-        mock_segment.text = "test"
-        mock_segment.start = 1.0
-        mock_segment.end = 1.5
+        # Mock _transcribe_single_segment to capture model_size argument
+        expected_segment = TimedSegment(
+            text="test",
+            start=1.0,
+            end=1.5,
+            words=(TimedWord(text="test", start=1.0, end=1.5),),
+        )
 
-        mock_result = MagicMock()
-        mock_result.segments = [mock_segment]
+        mock_audio_segments = [(Path("/fake/segment_0.wav"), 0.0, 5.0)]
+        captured_calls: list[dict] = []
 
-        mock_model = MagicMock()
-        mock_model.transcribe.return_value = mock_result
+        def mock_transcribe(audio_path, language, model_size, time_offset):
+            captured_calls.append({
+                "language": language,
+                "model_size": model_size,
+                "time_offset": time_offset,
+            })
+            return [expected_segment]
 
-        mock_stable_whisper = MagicMock()
-        mock_stable_whisper.load_model.return_value = mock_model
-
-        mock_torch = MagicMock()
-        mock_torch.cuda.is_available.return_value = False
-        mock_torch.backends.mps.is_available.return_value = False
-
-        # Mock mlx_whisper to not be available, so stable_whisper is used
-        with patch.dict(
-            "sys.modules",
-            {
-                "stable_whisper": mock_stable_whisper,
-                "torch": mock_torch,
-                "mlx_whisper": None,
-            },
+        with (
+            patch("alsmuse.audio.split_audio_on_silence", return_value=mock_audio_segments),
+            patch(
+                "alsmuse.lyrics_align._transcribe_single_segment",
+                side_effect=mock_transcribe,
+            ),
         ):
-            import importlib
-            from pathlib import Path
-
             from alsmuse import lyrics_align
-
-            importlib.reload(lyrics_align)
 
             # Call transcribe_lyrics with medium model
             lyrics_align.transcribe_lyrics(
@@ -1096,8 +1111,9 @@ class TestLanguageAndModelPassing:
                 model_size="medium",  # Medium model
             )
 
-        # Verify load_model was called with "medium"
-        mock_stable_whisper.load_model.assert_called_once_with("medium", device="cpu")
+        # Verify _transcribe_single_segment was called with model_size="medium"
+        assert len(captured_calls) == 1
+        assert captured_calls[0]["model_size"] == "medium"
 
     def test_language_option_passed_to_align(self) -> None:
         """--language option is passed to align_lyrics function."""

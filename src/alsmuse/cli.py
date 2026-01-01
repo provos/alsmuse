@@ -88,6 +88,13 @@ def main() -> None:
     default=None,
     help="Save transcribed lyrics to this file for review/editing.",
 )
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Save the A/V markdown table to this file instead of printing to stdout.",
+)
 def analyze(
     als_file: Path,
     structure_track: str,
@@ -102,6 +109,7 @@ def analyze(
     language: str,
     whisper_model: str,
     save_lyrics: Path | None,
+    output: Path | None,
 ) -> None:
     """Analyze an Ableton Live Set file.
 
@@ -195,7 +203,12 @@ def analyze(
             language=language,
             model_size=whisper_model,
         )
-        click.echo(result)
+
+        if output is not None:
+            output.write_text(result)
+            click.echo(f"A/V table saved to: {output}")
+        else:
+            click.echo(result)
     except ParseError as e:
         click.echo(f"Error parsing file: {e}", err=True)
         sys.exit(1)

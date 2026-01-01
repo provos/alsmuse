@@ -511,6 +511,131 @@ def combine_clips_to_audio(
     return output_path, valid_ranges
 
 
+def split_audio_on_silence(
+    audio_path: Path,
+    output_dir: Path,
+    min_silence_duration: float = 1.0,
+    silence_threshold_db: float = -40.0,
+    min_segment_duration: float = 0.5,
+) -> list[tuple[Path, float, float]]:
+    """Split audio file into segments based on silence detection.
+
+    Detects silent regions and splits the audio into separate files,
+    one per non-silent segment. This is ideal for transcription since
+    Whisper hallucinates during silence.
+
+    Args:
+        audio_path: Path to the audio file to split.
+        output_dir: Directory to write segment files.
+        min_silence_duration: Minimum silence duration (seconds) to trigger split.
+        silence_threshold_db: Audio level below this (in dB) is considered silence.
+        min_segment_duration: Minimum segment duration to keep (seconds).
+
+    Returns:
+        List of (segment_path, original_start_time, original_end_time) tuples.
+        Times are in seconds relative to the original audio file.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    # Read audio
+    audio, sample_rate = sf.read(str(audio_path), dtype="float32")
+
+    # Convert to mono for silence detection
+    if audio.ndim > 1:
+        mono = audio.mean(axis=1)
+    else:
+        mono = audio
+
+    # Convert threshold from dB to linear amplitude
+    silence_threshold = 10 ** (silence_threshold_db / 20)
+
+    # Calculate RMS energy in short windows
+    window_size = int(0.05 * sample_rate)  # 50ms windows
+    hop_size = window_size // 2
+
+    # Pad audio to ensure we can process all samples
+    padded = np.pad(mono, (0, window_size))
+
+    # Calculate RMS for each window
+    num_windows = (len(padded) - window_size) // hop_size + 1
+    rms = np.zeros(num_windows)
+    for i in range(num_windows):
+        start = i * hop_size
+        window = padded[start : start + window_size]
+        rms[i] = np.sqrt(np.mean(window ** 2))
+
+    # Find silent regions (RMS below threshold)
+    is_silent = rms < silence_threshold
+
+    # Convert min_silence_duration to windows
+    min_silence_windows = int(min_silence_duration * sample_rate / hop_size)
+
+    # Find contiguous silent regions
+    silent_regions: list[tuple[int, int]] = []
+    in_silence = False
+    silence_start = 0
+
+    for i, silent in enumerate(is_silent):
+        if silent and not in_silence:
+            silence_start = i
+            in_silence = True
+        elif not silent and in_silence:
+            if i - silence_start >= min_silence_windows:
+                silent_regions.append((silence_start, i))
+            in_silence = False
+
+    # Handle trailing silence
+    if in_silence and len(is_silent) - silence_start >= min_silence_windows:
+        silent_regions.append((silence_start, len(is_silent)))
+
+    # Convert window indices to sample indices
+    def window_to_sample(w: int) -> int:
+        return w * hop_size
+
+    # Build segment boundaries (non-silent regions)
+    segments: list[tuple[int, int]] = []
+    prev_end = 0
+
+    for silence_start_w, silence_end_w in silent_regions:
+        segment_start = prev_end
+        segment_end = window_to_sample(silence_start_w)
+
+        if segment_end > segment_start:
+            segments.append((segment_start, segment_end))
+
+        prev_end = window_to_sample(silence_end_w)
+
+    # Add final segment if there's audio after last silence
+    if prev_end < len(mono):
+        segments.append((prev_end, len(mono)))
+
+    # If no silence detected, use entire file as one segment
+    if not segments:
+        segments = [(0, len(mono))]
+
+    # Filter out segments that are too short
+    min_samples = int(min_segment_duration * sample_rate)
+    segments = [(s, e) for s, e in segments if e - s >= min_samples]
+
+    # Create output directory
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write each segment to a separate file
+    result: list[tuple[Path, float, float]] = []
+    for i, (start_sample, end_sample) in enumerate(segments):
+        segment_audio = audio[start_sample:end_sample]
+        segment_path = output_dir / f"segment_{i:03d}.wav"
+
+        sf.write(str(segment_path), segment_audio, sample_rate)
+
+        start_time = start_sample / sample_rate
+        end_time = end_sample / sample_rate
+        result.append((segment_path, start_time, end_time))
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Interactive Track Selection (Phase 2)
 # ---------------------------------------------------------------------------

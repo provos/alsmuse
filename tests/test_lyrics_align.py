@@ -979,16 +979,26 @@ class TestTimedSegmentModel:
 
 
 # ---------------------------------------------------------------------------
-# Tests for transcribe_lyrics (with mocked stable_whisper)
+# Tests for transcribe_lyrics (with mocked segment-based approach)
 # ---------------------------------------------------------------------------
 
 
 class TestTranscribeLyrics:
-    """Tests for transcribe_lyrics function."""
+    """Tests for transcribe_lyrics function.
+
+    These tests mock split_audio_on_silence and _transcribe_single_segment
+    to test the segment-based transcription logic without reading real files.
+    """
 
     def test_raises_error_when_no_backend_installed(self) -> None:
         """Raises AlignmentError when no transcription backend is installed."""
-        with patch.dict("sys.modules", {"stable_whisper": None, "mlx_whisper": None}):
+        # Mock split_audio_on_silence to return one segment
+        mock_segments = [(Path("/fake/segment_0.wav"), 0.0, 5.0)]
+
+        with (
+            patch("alsmuse.audio.split_audio_on_silence", return_value=mock_segments),
+            patch.dict("sys.modules", {"stable_whisper": None, "mlx_whisper": None}),
+        ):
             import importlib
 
             from alsmuse import lyrics_align
@@ -1001,57 +1011,33 @@ class TestTranscribeLyrics:
                     valid_ranges=[(0.0, 10.0)],
                 )
 
-    def test_successful_transcription_with_mocked_model(self) -> None:
-        """Successful transcription returns filtered TimedSegment list."""
-        # Create mock word objects
-        mock_word1 = MagicMock()
-        mock_word1.word = "hello"
-        mock_word1.start = 1.0
-        mock_word1.end = 1.5
+    def test_successful_transcription_with_mocked_segments(self) -> None:
+        """Successful transcription returns TimedSegment list from segments."""
+        # Mock split_audio_on_silence to return one segment
+        mock_audio_segments = [(Path("/fake/segment_0.wav"), 0.0, 5.0)]
 
-        mock_word2 = MagicMock()
-        mock_word2.word = "world"
-        mock_word2.start = 1.6
-        mock_word2.end = 2.0
+        # Create expected TimedSegments that _transcribe_single_segment would return
+        expected_segment = TimedSegment(
+            text="hello world",
+            start=1.0,
+            end=2.0,
+            words=(
+                TimedWord(text="hello", start=1.0, end=1.5),
+                TimedWord(text="world", start=1.6, end=2.0),
+            ),
+        )
 
-        # Create mock segment
-        mock_segment = MagicMock()
-        mock_segment.words = [mock_word1, mock_word2]
-        mock_segment.text = "hello world"
-        mock_segment.start = 1.0
-        mock_segment.end = 2.0
-
-        # Create mock result
-        mock_result = MagicMock()
-        mock_result.segments = [mock_segment]
-
-        # Create mock model
-        mock_model = MagicMock()
-        mock_model.transcribe.return_value = mock_result
-
-        # Create mock stable_whisper module
-        mock_stable_whisper = MagicMock()
-        mock_stable_whisper.load_model.return_value = mock_model
-
-        # Create mock torch
-        mock_torch = MagicMock()
-        mock_torch.cuda.is_available.return_value = False
-        mock_torch.backends.mps.is_available.return_value = False
-
-        # Mock mlx_whisper to not be available, so stable_whisper is used
-        with patch.dict(
-            "sys.modules",
-            {
-                "stable_whisper": mock_stable_whisper,
-                "torch": mock_torch,
-                "mlx_whisper": None,
-            },
+        with (
+            patch(
+                "alsmuse.audio.split_audio_on_silence",
+                return_value=mock_audio_segments,
+            ),
+            patch(
+                "alsmuse.lyrics_align._transcribe_single_segment",
+                return_value=[expected_segment],
+            ),
         ):
-            import importlib
-
             from alsmuse import lyrics_align
-
-            importlib.reload(lyrics_align)
 
             segments, raw_text = lyrics_align.transcribe_lyrics(
                 audio_path=Path("/fake/audio.wav"),
@@ -1065,146 +1051,139 @@ class TestTranscribeLyrics:
         assert len(segments[0].words) == 2
         assert raw_text == "hello world"
 
-    def test_filters_segments_outside_valid_ranges(self) -> None:
-        """Segments outside valid ranges are filtered out."""
-        # Create mock segment in valid range
-        mock_word_valid = MagicMock()
-        mock_word_valid.word = "hello"
-        mock_word_valid.start = 1.0
-        mock_word_valid.end = 1.5
+    def test_multiple_segments_combined(self) -> None:
+        """Segments from multiple audio chunks are combined."""
+        # Two audio segments at different times
+        mock_audio_segments = [
+            (Path("/fake/segment_0.wav"), 0.0, 3.0),
+            (Path("/fake/segment_1.wav"), 5.0, 8.0),
+        ]
 
-        mock_segment_valid = MagicMock()
-        mock_segment_valid.words = [mock_word_valid]
-        mock_segment_valid.text = "hello"
-        mock_segment_valid.start = 1.0
-        mock_segment_valid.end = 1.5
+        # Results from each segment
+        segment1 = TimedSegment(
+            text="hello",
+            start=1.0,
+            end=2.0,
+            words=(TimedWord(text="hello", start=1.0, end=2.0),),
+        )
+        segment2 = TimedSegment(
+            text="world",
+            start=6.0,
+            end=7.0,
+            words=(TimedWord(text="world", start=6.0, end=7.0),),
+        )
 
-        # Create mock segment outside valid range
-        mock_word_invalid = MagicMock()
-        mock_word_invalid.word = "phantom"
-        mock_word_invalid.start = 15.0
-        mock_word_invalid.end = 15.5
+        # _transcribe_single_segment is called once per audio segment
+        call_count = [0]
 
-        mock_segment_invalid = MagicMock()
-        mock_segment_invalid.words = [mock_word_invalid]
-        mock_segment_invalid.text = "phantom"
-        mock_segment_invalid.start = 15.0
-        mock_segment_invalid.end = 15.5
+        def mock_transcribe(audio_path, language, model_size, time_offset):
+            result = [segment1] if call_count[0] == 0 else [segment2]
+            call_count[0] += 1
+            return result
 
-        mock_result = MagicMock()
-        mock_result.segments = [mock_segment_valid, mock_segment_invalid]
-
-        mock_model = MagicMock()
-        mock_model.transcribe.return_value = mock_result
-
-        mock_stable_whisper = MagicMock()
-        mock_stable_whisper.load_model.return_value = mock_model
-
-        mock_torch = MagicMock()
-        mock_torch.cuda.is_available.return_value = False
-        mock_torch.backends.mps.is_available.return_value = False
-
-        # Mock mlx_whisper to not be available, so stable_whisper is used
-        with patch.dict(
-            "sys.modules",
-            {
-                "stable_whisper": mock_stable_whisper,
-                "torch": mock_torch,
-                "mlx_whisper": None,
-            },
+        with (
+            patch(
+                "alsmuse.audio.split_audio_on_silence",
+                return_value=mock_audio_segments,
+            ),
+            patch(
+                "alsmuse.lyrics_align._transcribe_single_segment",
+                side_effect=mock_transcribe,
+            ),
         ):
-            import importlib
-
             from alsmuse import lyrics_align
-
-            importlib.reload(lyrics_align)
 
             segments, raw_text = lyrics_align.transcribe_lyrics(
                 audio_path=Path("/fake/audio.wav"),
-                valid_ranges=[(0.0, 10.0)],  # Only 0-10s is valid
+                valid_ranges=[],
             )
 
-        # Only the segment in valid range should be returned
-        assert len(segments) == 1
+        assert len(segments) == 2
         assert segments[0].text == "hello"
-        assert raw_text == "hello"
+        assert segments[1].text == "world"
+        assert raw_text == "hello\nworld"
 
-    def test_uses_cpu_for_mps(self) -> None:
-        """Model falls back to CPU when MPS is detected."""
-        mock_word = MagicMock()
-        mock_word.word = "test"
-        mock_word.start = 0.0
-        mock_word.end = 1.0
-
-        mock_segment = MagicMock()
-        mock_segment.words = [mock_word]
-        mock_segment.text = "test"
-        mock_segment.start = 0.0
-        mock_segment.end = 1.0
-
-        mock_result = MagicMock()
-        mock_result.segments = [mock_segment]
-
-        mock_model = MagicMock()
-        mock_model.transcribe.return_value = mock_result
-
-        mock_stable_whisper = MagicMock()
-        mock_stable_whisper.load_model.return_value = mock_model
-
-        mock_torch = MagicMock()
-        mock_torch.cuda.is_available.return_value = False
-        mock_torch.backends.mps.is_available.return_value = True  # macOS
-
-        # Mock mlx_whisper to not be available, so stable_whisper is used
-        with patch.dict(
-            "sys.modules",
-            {
-                "stable_whisper": mock_stable_whisper,
-                "torch": mock_torch,
-                "mlx_whisper": None,
-            },
+    def test_empty_audio_returns_empty_result(self) -> None:
+        """No segments from silence detection returns empty result."""
+        with patch(
+            "alsmuse.audio.split_audio_on_silence",
+            return_value=[],  # No audio segments
         ):
-            import importlib
-
             from alsmuse import lyrics_align
 
-            importlib.reload(lyrics_align)
-
-            lyrics_align.transcribe_lyrics(
+            segments, raw_text = lyrics_align.transcribe_lyrics(
                 audio_path=Path("/fake/audio.wav"),
                 valid_ranges=[(0.0, 10.0)],
-                model_size="small",
             )
 
-        # Verify model was loaded with CPU device (MPS falls back to CPU)
-        mock_stable_whisper.load_model.assert_called_once_with("small", device="cpu")
+        assert segments == []
+        assert raw_text == ""
+
+    def test_segments_sorted_by_start_time(self) -> None:
+        """Segments are sorted by start time in final result."""
+        # Audio segments that produce out-of-order results
+        mock_audio_segments = [
+            (Path("/fake/segment_0.wav"), 5.0, 8.0),
+            (Path("/fake/segment_1.wav"), 0.0, 3.0),
+        ]
+
+        # Results in opposite order to input
+        segment_early = TimedSegment(
+            text="first",
+            start=1.0,
+            end=2.0,
+            words=(TimedWord(text="first", start=1.0, end=2.0),),
+        )
+        segment_late = TimedSegment(
+            text="second",
+            start=6.0,
+            end=7.0,
+            words=(TimedWord(text="second", start=6.0, end=7.0),),
+        )
+
+        call_count = [0]
+
+        def mock_transcribe(audio_path, language, model_size, time_offset):
+            result = [segment_late] if call_count[0] == 0 else [segment_early]
+            call_count[0] += 1
+            return result
+
+        with (
+            patch(
+                "alsmuse.audio.split_audio_on_silence",
+                return_value=mock_audio_segments,
+            ),
+            patch(
+                "alsmuse.lyrics_align._transcribe_single_segment",
+                side_effect=mock_transcribe,
+            ),
+        ):
+            from alsmuse import lyrics_align
+
+            segments, _ = lyrics_align.transcribe_lyrics(
+                audio_path=Path("/fake/audio.wav"),
+                valid_ranges=[],
+            )
+
+        # Should be sorted by start time
+        assert segments[0].text == "first"
+        assert segments[1].text == "second"
 
     def test_transcription_failure_raises_alignment_error(self) -> None:
         """Transcription failure raises AlignmentError."""
-        mock_model = MagicMock()
-        mock_model.transcribe.side_effect = RuntimeError("Transcription failed")
+        mock_audio_segments = [(Path("/fake/segment_0.wav"), 0.0, 5.0)]
 
-        mock_stable_whisper = MagicMock()
-        mock_stable_whisper.load_model.return_value = mock_model
-
-        mock_torch = MagicMock()
-        mock_torch.cuda.is_available.return_value = False
-        mock_torch.backends.mps.is_available.return_value = False
-
-        # Mock mlx_whisper to not be available, so stable_whisper is used
-        with patch.dict(
-            "sys.modules",
-            {
-                "stable_whisper": mock_stable_whisper,
-                "torch": mock_torch,
-                "mlx_whisper": None,
-            },
+        with (
+            patch(
+                "alsmuse.audio.split_audio_on_silence",
+                return_value=mock_audio_segments,
+            ),
+            patch(
+                "alsmuse.lyrics_align._transcribe_single_segment",
+                side_effect=AlignmentError("Transcription failed"),
+            ),
         ):
-            import importlib
-
             from alsmuse import lyrics_align
-
-            importlib.reload(lyrics_align)
 
             with pytest.raises(AlignmentError, match="Transcription failed"):
                 lyrics_align.transcribe_lyrics(

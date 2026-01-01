@@ -336,6 +336,7 @@ def _transcribe_with_mlx_whisper(
     audio_path: Path,
     language: str,
     model_size: str,
+    time_offset: float = 0.0,
 ) -> list[TimedSegment]:
     """Transcribe using mlx-whisper (fast on Apple Silicon).
 
@@ -343,6 +344,7 @@ def _transcribe_with_mlx_whisper(
         audio_path: Path to audio file.
         language: Language code.
         model_size: Whisper model size.
+        time_offset: Offset to add to all timestamps (for segment-based transcription).
 
     Returns:
         List of TimedSegment from transcription.
@@ -369,11 +371,12 @@ def _transcribe_with_mlx_whisper(
             path_or_hf_repo=model_repo,
             language=language,
             word_timestamps=True,
+            verbose=True,  # Show transcription progress
         )
     except Exception as e:
         raise AlignmentError(f"MLX transcription failed: {e}") from e
 
-    # Build segments from mlx-whisper result
+    # Build segments from mlx-whisper result, applying time offset
     all_segments: list[TimedSegment] = []
     for segment in result.get("segments", []):
         words: list[TimedWord] = []
@@ -383,8 +386,8 @@ def _transcribe_with_mlx_whisper(
                 words.append(
                     TimedWord(
                         text=word_text,
-                        start=word_info.get("start", 0.0),
-                        end=word_info.get("end", 0.0),
+                        start=word_info.get("start", 0.0) + time_offset,
+                        end=word_info.get("end", 0.0) + time_offset,
                     )
                 )
 
@@ -393,8 +396,8 @@ def _transcribe_with_mlx_whisper(
             all_segments.append(
                 TimedSegment(
                     text=segment_text,
-                    start=segment.get("start", 0.0),
-                    end=segment.get("end", 0.0),
+                    start=segment.get("start", 0.0) + time_offset,
+                    end=segment.get("end", 0.0) + time_offset,
                     words=tuple(words),
                 )
             )
@@ -406,6 +409,7 @@ def _transcribe_with_stable_ts(
     audio_path: Path,
     language: str,
     model_size: str,
+    time_offset: float = 0.0,
 ) -> list[TimedSegment]:
     """Transcribe using stable-ts (cross-platform, slower on Mac).
 
@@ -413,6 +417,7 @@ def _transcribe_with_stable_ts(
         audio_path: Path to audio file.
         language: Language code.
         model_size: Whisper model size.
+        time_offset: Offset to add to all timestamps (for segment-based transcription).
 
     Returns:
         List of TimedSegment from transcription.
@@ -441,7 +446,7 @@ def _transcribe_with_stable_ts(
     except Exception as e:
         raise AlignmentError(f"Transcription failed: {e}") from e
 
-    # Build segments from Whisper result
+    # Build segments from Whisper result, applying time offset
     all_segments: list[TimedSegment] = []
     for segment in result.segments:
         words: list[TimedWord] = []
@@ -451,8 +456,8 @@ def _transcribe_with_stable_ts(
                 words.append(
                     TimedWord(
                         text=word_text,
-                        start=word.start,
-                        end=word.end,
+                        start=word.start + time_offset,
+                        end=word.end + time_offset,
                     )
                 )
 
@@ -461,8 +466,8 @@ def _transcribe_with_stable_ts(
             all_segments.append(
                 TimedSegment(
                     text=segment_text,
-                    start=segment.start,
-                    end=segment.end,
+                    start=segment.start + time_offset,
+                    end=segment.end + time_offset,
                     words=tuple(words),
                 )
             )
@@ -470,23 +475,60 @@ def _transcribe_with_stable_ts(
     return all_segments
 
 
+def _transcribe_single_segment(
+    audio_path: Path,
+    language: str,
+    model_size: str,
+    time_offset: float,
+) -> list[TimedSegment]:
+    """Transcribe a single audio segment, trying mlx-whisper first.
+
+    Args:
+        audio_path: Path to audio file.
+        language: Language code.
+        model_size: Whisper model size.
+        time_offset: Offset to add to all timestamps.
+
+    Returns:
+        List of TimedSegment from transcription.
+
+    Raises:
+        AlignmentError: If no transcription backend is available.
+    """
+    try:
+        return _transcribe_with_mlx_whisper(audio_path, language, model_size, time_offset)
+    except ImportError:
+        try:
+            return _transcribe_with_stable_ts(audio_path, language, model_size, time_offset)
+        except ImportError as e:
+            raise AlignmentError(
+                "No transcription backend available. Install one of:\n"
+                "  - pip install 'alsmuse[align-mlx]'  (fast, Apple Silicon only)\n"
+                "  - pip install 'alsmuse[align]'      (cross-platform)"
+            ) from e
+
+
 def transcribe_lyrics(
     audio_path: Path,
-    valid_ranges: list[tuple[float, float]],
+    valid_ranges: list[tuple[float, float]],  # Not used with segment-based approach
     language: str = "en",
     model_size: str = "base",
+    segment_dir: Path | None = None,
 ) -> tuple[list[TimedSegment], str]:
     """Transcribe lyrics from audio using Whisper ASR.
 
-    Uses mlx-whisper on Apple Silicon for fast transcription, falling back
-    to stable-ts on other platforms. Preserves segment boundaries and filters
-    results to only include content within known valid audio ranges.
+    Splits audio on silence and transcribes each segment separately to
+    avoid Whisper hallucinations during silent sections. Uses mlx-whisper
+    on Apple Silicon for fast transcription, falling back to stable-ts.
 
     Args:
         audio_path: Path to combined vocal audio.
-        valid_ranges: List of (start, end) tuples where real audio exists.
+        valid_ranges: Not used (kept for API compatibility). Silence detection
+            now handles filtering.
         language: Language code for transcription model.
         model_size: Whisper model size.
+        segment_dir: Optional directory to save audio segments (for debugging).
+            If None, uses a temp directory that is cleaned up afterward.
 
     Returns:
         Tuple of:
@@ -496,27 +538,50 @@ def transcribe_lyrics(
     Raises:
         AlignmentError: If no transcription backend is available.
     """
-    # Try mlx-whisper first (fast on Apple Silicon)
+    import shutil
+    import tempfile
+
+    from .audio import split_audio_on_silence
+
+    # Create temp directory for segments if not provided
+    cleanup_dir = segment_dir is None
+    if segment_dir is None:
+        segment_dir = Path(tempfile.mkdtemp(prefix="alsmuse_segments_"))
+
     try:
-        all_segments = _transcribe_with_mlx_whisper(audio_path, language, model_size)
-    except ImportError:
-        # mlx-whisper not installed, try stable-ts
-        try:
-            all_segments = _transcribe_with_stable_ts(audio_path, language, model_size)
-        except ImportError as e:
-            raise AlignmentError(
-                "No transcription backend available. Install one of:\n"
-                "  - pip install 'alsmuse[align-mlx]'  (fast, Apple Silicon only)\n"
-                "  - pip install 'alsmuse[align]'      (cross-platform)"
-            ) from e
+        # Split audio on silence - returns list of (path, start_time, end_time)
+        audio_segments = split_audio_on_silence(
+            audio_path,
+            segment_dir,
+            min_silence_duration=1.0,  # 1 second of silence to split
+            silence_threshold_db=-40.0,  # -40dB threshold
+            min_segment_duration=0.5,  # Keep segments >= 0.5s
+        )
 
-    # Filter segments to valid ranges
-    filtered_segments = filter_segments_to_valid_ranges(all_segments, valid_ranges)
+        if not audio_segments:
+            return [], ""
 
-    # Build raw text for saving
-    raw_text = "\n".join(s.text for s in filtered_segments)
+        # Transcribe each segment separately
+        all_segments: list[TimedSegment] = []
+        for seg_path, start_time, end_time in audio_segments:
+            # Transcribe this segment with time offset
+            seg_result = _transcribe_single_segment(
+                seg_path, language, model_size, time_offset=start_time
+            )
+            all_segments.extend(seg_result)
 
-    return filtered_segments, raw_text
+        # Sort by start time (should already be sorted, but ensure)
+        all_segments.sort(key=lambda s: s.start)
+
+        # Build raw text for saving
+        raw_text = "\n".join(s.text for s in all_segments)
+
+        return all_segments, raw_text
+
+    finally:
+        # Cleanup temp directory
+        if cleanup_dir and segment_dir.exists():
+            shutil.rmtree(segment_dir, ignore_errors=True)
 
 
 def _split_segment_at_punctuation(
