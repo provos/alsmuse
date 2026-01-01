@@ -360,7 +360,7 @@ def align_and_distribute_lyrics(
 
     try:
         try:
-            _, valid_ranges = combine_clips_to_audio(selected_clips, combined_path)
+            _, valid_ranges = combine_clips_to_audio(selected_clips, combined_path, bpm)
         except Exception as e:
             raise AlignmentError(f"Failed to combine audio clips: {e}") from e
 
@@ -483,7 +483,7 @@ def transcribe_and_distribute_lyrics(
 
     try:
         try:
-            _, valid_ranges = combine_clips_to_audio(selected_clips, combined_path)
+            _, valid_ranges = combine_clips_to_audio(selected_clips, combined_path, bpm)
         except Exception as e:
             raise AlignmentError(f"Failed to combine audio clips: {e}") from e
 

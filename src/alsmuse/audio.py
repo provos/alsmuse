@@ -226,6 +226,28 @@ def _parse_audio_clip_element(
         )
         return None
 
+    # Extract sample start/end offsets from Loop element
+    # These indicate which portion of the audio file to play
+    sample_start_beats: float | None = None
+    sample_end_beats: float | None = None
+
+    loop_elem = clip_elem.find("Loop")
+    if loop_elem is not None:
+        loop_start_elem = loop_elem.find("LoopStart")
+        loop_end_elem = loop_elem.find("LoopEnd")
+
+        if loop_start_elem is not None:
+            try:
+                sample_start_beats = float(loop_start_elem.get("Value", "0"))
+            except ValueError:
+                pass
+
+        if loop_end_elem is not None:
+            try:
+                sample_end_beats = float(loop_end_elem.get("Value", "0"))
+            except ValueError:
+                pass
+
     # Convert beats to seconds
     start_seconds = beats_to_seconds(start_beats, bpm)
     end_seconds = beats_to_seconds(end_beats, bpm)
@@ -237,6 +259,8 @@ def _parse_audio_clip_element(
         end_beats=end_beats,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
+        sample_start_beats=sample_start_beats,
+        sample_end_beats=sample_end_beats,
     )
 
 
@@ -415,12 +439,16 @@ def _resample_audio(
 def combine_clips_to_audio(
     clips: list[AudioClipRef],
     output_path: Path,
+    bpm: float = 120.0,
 ) -> tuple[Path, list[tuple[float, float]]]:
     """Combine audio clips into a single file, preserving timeline positions.
 
     Creates a silent buffer and mixes each clip at its correct position.
     Returns both the combined audio path AND the valid time ranges where
     actual audio exists (for hallucination filtering).
+
+    Each clip's sample_start_beats and sample_end_beats are used to extract
+    only the relevant portion of the audio file (Ableton's Loop region).
 
     Uses only numpy + soundfile (no ffmpeg, no pydub).
     Supports: WAV, AIFF, FLAC (common Ableton formats).
@@ -429,6 +457,7 @@ def combine_clips_to_audio(
     Args:
         clips: Audio clips to combine. Must not be empty.
         output_path: Where to write the combined audio.
+        bpm: Beats per minute, used for converting sample offsets.
 
     Returns:
         Tuple of:
@@ -480,6 +509,23 @@ def combine_clips_to_audio(
         if sr != sample_rate:
             audio = _resample_audio(audio, sr, sample_rate)
 
+        # Extract the correct portion of the audio file using Loop offsets
+        # sample_start_beats and sample_end_beats are in beats at project BPM
+        if clip.sample_start_beats is not None and clip.sample_end_beats is not None:
+            # Convert beats to seconds, then to samples
+            sample_start_seconds = beats_to_seconds(clip.sample_start_beats, bpm)
+            sample_end_seconds = beats_to_seconds(clip.sample_end_beats, bpm)
+
+            sample_start_idx = int(sample_start_seconds * sr)
+            sample_end_idx = int(sample_end_seconds * sr)
+
+            # Clamp to valid range
+            sample_start_idx = max(0, min(sample_start_idx, len(audio)))
+            sample_end_idx = max(sample_start_idx, min(sample_end_idx, len(audio)))
+
+            # Extract the portion
+            audio = audio[sample_start_idx:sample_end_idx]
+
         # Handle mono/stereo mismatch
         if channels > 1 and audio.ndim == 1:
             # Convert mono to stereo by duplicating
@@ -488,7 +534,7 @@ def combine_clips_to_audio(
             # Convert stereo to mono by averaging
             audio = audio.mean(axis=1)
 
-        # Calculate position in samples
+        # Calculate position in samples (timeline position)
         start_sample = int(clip.start_seconds * sample_rate)
         clip_samples = min(len(audio), total_samples - start_sample)
 

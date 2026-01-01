@@ -265,6 +265,11 @@ class AudioClipRef:
         end_beats: End position on timeline in beats.
         start_seconds: Start position in seconds (computed from BPM).
         end_seconds: End position in seconds (computed from BPM).
+        sample_start_beats: Start offset within the audio file (in beats).
+            This is the Loop/LoopStart value from Ableton, indicating where
+            in the sample to start playing. None means start from beginning.
+        sample_end_beats: End offset within the audio file (in beats).
+            This is the Loop/LoopEnd value from Ableton. None means play to end.
     """
 
     track_name: str
@@ -273,6 +278,8 @@ class AudioClipRef:
     end_beats: float
     start_seconds: float
     end_seconds: float
+    sample_start_beats: float | None = None
+    sample_end_beats: float | None = None
 
 
 @dataclass(frozen=True)
