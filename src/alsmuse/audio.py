@@ -670,12 +670,14 @@ def split_audio_on_silence(
 def prompt_track_selection(
     track_names: list[str],
     auto_select_single: bool = True,
+    default_tracks: list[str] | None = None,
 ) -> list[str]:
     """Interactively prompt user to select vocal tracks.
 
     Args:
         track_names: List of detected vocal track names.
         auto_select_single: If True and only one track, skip prompt.
+        default_tracks: Tracks to pre-select. If None, all tracks are pre-selected.
 
     Returns:
         List of selected track names.
@@ -691,13 +693,21 @@ def prompt_track_selection(
     if len(track_names) == 1 and auto_select_single:
         return track_names
 
+    # Determine which tracks to pre-select
+    if default_tracks is not None:
+        default_set = {t.lower() for t in default_tracks}
+        choices = [
+            questionary.Choice(name, checked=name.lower() in default_set)
+            for name in track_names
+        ]
+    else:
+        # No defaults specified: pre-select all
+        choices = [questionary.Choice(name, checked=True) for name in track_names]
+
     # Multiple tracks: interactive selection
     selected = questionary.checkbox(
         "Select vocal tracks to include for lyrics alignment:",
-        choices=[
-            questionary.Choice(name, checked=True)  # Pre-select all
-            for name in track_names
-        ],
+        choices=choices,
     ).ask()
 
     if selected is None:
@@ -713,20 +723,25 @@ def select_vocal_tracks(
     explicit_tracks: tuple[str, ...] | None,
     use_all: bool,
     config_tracks: list[str] | None = None,
+    category_overrides: dict[str, str] | None = None,
 ) -> list[AudioClipRef]:
     """Select vocal tracks for alignment.
 
-    Handles four modes (in priority order):
-    1. Explicit tracks specified via CLI options
-    2. Tracks from config file (if config_tracks provided)
-    3. use_all=True: Use all detected vocal tracks without prompting
-    4. Interactive: Prompt user when multiple tracks found (if TTY available)
+    Handles selection modes:
+    1. Explicit tracks specified via CLI options (highest priority, no prompt)
+    2. use_all=True: Use all detected vocal tracks without prompting
+    3. Interactive: Prompt user when multiple tracks found (if TTY available),
+       using config_tracks as defaults if available
+    4. Non-TTY with config: Use config tracks
+    5. Non-TTY without config: Use all and warn
 
     Args:
         all_clips: All audio clips from ALS.
         explicit_tracks: Tracks specified via --vocal-track options.
         use_all: If True, use all detected vocal tracks without prompting.
-        config_tracks: Tracks from .muse config file.
+        config_tracks: Tracks from .muse config file (used as defaults in prompt).
+        category_overrides: Category overrides from .muse config file.
+            Tracks categorized as "vocals" are included in detection.
 
     Returns:
         Filtered list of clips from selected tracks, sorted by start time.
@@ -739,16 +754,16 @@ def select_vocal_tracks(
             key=lambda c: c.start_beats,
         )
 
-    # Config file selection (second priority)
-    if config_tracks:
-        config_lower = {t.lower() for t in config_tracks}
-        matching_clips = [c for c in all_clips if c.track_name.lower() in config_lower]
-        if matching_clips:
-            return sorted(matching_clips, key=lambda c: c.start_beats)
-        # Config tracks not found, fall through to auto-detection
-
     # Find all potential vocal tracks
-    vocal_clips = [c for c in all_clips if is_vocal_track(c.track_name)]
+    # Include tracks detected by keywords OR categorized as "vocals" in overrides
+    def is_vocal(clip: AudioClipRef) -> bool:
+        if is_vocal_track(clip.track_name):
+            return True
+        return bool(
+            category_overrides and category_overrides.get(clip.track_name) == "vocals"
+        )
+
+    vocal_clips = [c for c in all_clips if is_vocal(c)]
     track_names = get_unique_vocal_track_names(vocal_clips)
 
     if not track_names:
@@ -763,15 +778,22 @@ def select_vocal_tracks(
         return sorted(vocal_clips, key=lambda c: c.start_beats)
 
     # Interactive selection (if TTY available)
+    # Use config_tracks as defaults if available
     if sys.stdin.isatty():
-        selected_names = prompt_track_selection(track_names)
+        selected_names = prompt_track_selection(track_names, default_tracks=config_tracks)
         selected_set = set(selected_names)
         return sorted(
             [c for c in vocal_clips if c.track_name in selected_set],
             key=lambda c: c.start_beats,
         )
 
-    # Non-TTY: use all and warn
+    # Non-TTY: use config if available, otherwise use all and warn
+    if config_tracks:
+        config_lower = {t.lower() for t in config_tracks}
+        matching_clips = [c for c in vocal_clips if c.track_name.lower() in config_lower]
+        if matching_clips:
+            return sorted(matching_clips, key=lambda c: c.start_beats)
+
     click.echo(
         f"Multiple vocal tracks found: {', '.join(track_names)}. "
         "Using all. Use --vocal-track to select specific tracks.",
@@ -805,16 +827,19 @@ def select_vocal_tracks_with_config(
     # Load existing config
     config = load_config(als_path)
     config_tracks = config.vocal_tracks if config else None
+    category_overrides = config.category_overrides if config else None
 
     # Get initial selection
-    selected_clips = select_vocal_tracks(all_clips, explicit_tracks, use_all, config_tracks)
+    selected_clips = select_vocal_tracks(
+        all_clips, explicit_tracks, use_all, config_tracks, category_overrides
+    )
 
     # Get unique track names from selected clips
     selected_names = get_unique_vocal_track_names(selected_clips)
 
-    # If we did interactive selection (no explicit, no config, multiple tracks)
-    # save the selection to config
-    if not explicit_tracks and not config_tracks and sys.stdin.isatty() and selected_names:
+    # Save selection to config if interactive selection occurred
+    # (no explicit CLI tracks and TTY available)
+    if not explicit_tracks and not use_all and sys.stdin.isatty() and selected_names:
         # Update or create config with vocal tracks
         if config:
             config.vocal_tracks = selected_names

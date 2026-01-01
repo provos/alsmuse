@@ -1055,6 +1055,44 @@ class TestPromptTrackSelection:
             with pytest.raises(click.Abort):
                 prompt_track_selection(["Track 1", "Track 2"])
 
+    def test_default_tracks_preselected(self) -> None:
+        """Default tracks are pre-selected in the prompt."""
+        import questionary
+
+        with patch.object(questionary, "checkbox") as mock_checkbox:
+            mock_checkbox.return_value.ask.return_value = ["Track 1"]
+
+            prompt_track_selection(
+                ["Track 1", "Track 2", "Track 3"],
+                default_tracks=["Track 1", "Track 3"],
+            )
+
+            # Check that checkbox was called with correct choices
+            call_args = mock_checkbox.call_args
+            choices = call_args[1]["choices"]
+
+            # Track 1 and Track 3 should be checked, Track 2 should not
+            choice_states = {c.title: c.checked for c in choices}
+            assert choice_states["Track 1"] is True
+            assert choice_states["Track 2"] is False
+            assert choice_states["Track 3"] is True
+
+    def test_no_default_tracks_all_preselected(self) -> None:
+        """When no default_tracks, all tracks are pre-selected."""
+        import questionary
+
+        with patch.object(questionary, "checkbox") as mock_checkbox:
+            mock_checkbox.return_value.ask.return_value = ["Track 1"]
+
+            prompt_track_selection(["Track 1", "Track 2"])
+
+            call_args = mock_checkbox.call_args
+            choices = call_args[1]["choices"]
+
+            # All should be checked when no defaults specified
+            for choice in choices:
+                assert choice.checked is True
+
 
 class TestSelectVocalTracks:
     """Tests for select_vocal_tracks function."""
@@ -1165,7 +1203,58 @@ class TestSelectVocalTracks:
 
         assert len(result) == 1
         assert result[0].track_name == "Lead Vocal"
-        mock_prompt.assert_called_once_with(["Lead Vocal", "Backing Vox"])
+        mock_prompt.assert_called_once_with(
+            ["Lead Vocal", "Backing Vox"], default_tracks=None
+        )
+
+    def test_tty_with_config_tracks_uses_as_defaults(self) -> None:
+        """TTY with config_tracks passes them as defaults to prompt."""
+        clips = [
+            self._make_clip("Lead Vocal", 0, 64),
+            self._make_clip("Backing Vox", 32, 96),
+        ]
+
+        with (
+            patch("sys.stdin.isatty", return_value=True),
+            patch("alsmuse.audio.prompt_track_selection") as mock_prompt,
+        ):
+            mock_prompt.return_value = ["Lead Vocal"]
+
+            result = select_vocal_tracks(
+                clips,
+                explicit_tracks=None,
+                use_all=False,
+                config_tracks=["Lead Vocal"],
+            )
+
+        assert len(result) == 1
+        mock_prompt.assert_called_once_with(
+            ["Lead Vocal", "Backing Vox"], default_tracks=["Lead Vocal"]
+        )
+
+    def test_category_overrides_includes_vocals(self) -> None:
+        """Tracks categorized as 'vocals' in overrides are included."""
+        clips = [
+            self._make_clip("Lead Vocal", 0, 64),  # Detected by keyword
+            self._make_clip("Mystery Track", 32, 96),  # Not detected by keyword
+            self._make_clip("Drums", 0, 128),  # Not vocal
+        ]
+
+        # Without overrides, only Lead Vocal is detected
+        result = select_vocal_tracks(clips, explicit_tracks=None, use_all=True)
+        assert len(result) == 1
+        assert result[0].track_name == "Lead Vocal"
+
+        # With category override, Mystery Track is also included
+        result = select_vocal_tracks(
+            clips,
+            explicit_tracks=None,
+            use_all=True,
+            category_overrides={"Mystery Track": "vocals"},
+        )
+        assert len(result) == 2
+        track_names = {c.track_name for c in result}
+        assert track_names == {"Lead Vocal", "Mystery Track"}
 
     def test_results_sorted_by_start_time(self) -> None:
         """Results are sorted by start time."""
