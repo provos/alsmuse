@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
 from alsmuse.category_review import (
     prompt_category_review,
     review_categories_interactive,
@@ -90,9 +88,7 @@ class TestPromptCategoryReview:
         with patch("alsmuse.category_review.sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = False
 
-            result = prompt_category_review(
-                track_names, current_categories, available_categories
-            )
+            result = prompt_category_review(track_names, current_categories, available_categories)
 
         assert result is None
 

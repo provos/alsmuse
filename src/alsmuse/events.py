@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from model2vec import StaticModel
 
-from .midi import check_activity_in_range
+from .midi import check_activity_in_range, detect_midi_activity
 from .models import MidiClipContent, Phrase, TrackEvent
 
 if TYPE_CHECKING:
@@ -319,8 +319,6 @@ def detect_events_from_clip_contents(
     Returns:
         List of TrackEvent objects for state changes.
     """
-    from .midi import detect_midi_activity
-
     if not clip_contents:
         return []
 

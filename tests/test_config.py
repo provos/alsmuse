@@ -6,8 +6,6 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import pytest
-
 from alsmuse.config import (
     CONFIG_VERSION,
     MuseConfig,
@@ -19,7 +17,7 @@ from alsmuse.config import (
 )
 
 if TYPE_CHECKING:
-    from pytest import TempPathFactory
+    pass
 
 
 class TestMuseConfig:

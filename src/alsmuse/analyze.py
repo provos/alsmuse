@@ -7,13 +7,23 @@ parsing, extraction, and formatting of Ableton Live Set files.
 from __future__ import annotations
 
 import logging
+import sys
 import tempfile
 from pathlib import Path
 
 import click
 
+from .audio import (
+    combine_clips_to_audio,
+    extract_audio_clips,
+    select_vocal_tracks_with_config,
+)
+from .category_review import prompt_category_review
+from .config import MuseConfig, load_config, save_config
 from .events import (
+    categorize_all_tracks,
     detect_events_from_clip_contents_phrase_aligned,
+    get_available_categories,
     merge_events_into_phrases,
 )
 from .exceptions import AlignmentError
@@ -22,8 +32,16 @@ from .formatter import format_av_table, format_phrase_table
 from .lyrics import (
     distribute_lyrics,
     distribute_timed_lyrics,
+    format_segments_as_lrc,
+    format_timed_lines_as_lrc,
     parse_lyrics_file,
     parse_lyrics_file_auto,
+)
+from .lyrics_align import (
+    align_lyrics,
+    segments_to_lines,
+    transcribe_lyrics,
+    words_to_lines,
 )
 from .midi import extract_midi_clip_contents
 from .models import MidiClipContent, Phrase, TrackEvent
@@ -126,10 +144,6 @@ def analyze_als_v2(
         ParseError: If the file cannot be parsed
         TrackNotFoundError: If the structure track is not found
     """
-    import sys
-
-    from .config import load_config
-
     live_set = parse_als_file(als_path)
     bpm = live_set.tempo.bpm
 
@@ -145,9 +159,6 @@ def analyze_als_v2(
 
     # Interactive category review (if TTY available and enabled)
     if show_events and interactive and sys.stdin.isatty():
-        from .category_review import prompt_category_review
-        from .events import categorize_all_tracks, get_available_categories
-
         track_names = get_all_track_names(als_path)
         current_categories = categorize_all_tracks(track_names, category_overrides)
         available_categories = get_available_categories()
@@ -161,8 +172,6 @@ def analyze_als_v2(
             category_overrides = {**category_overrides, **new_overrides}
 
             # Save to config
-            from .config import MuseConfig, save_config
-
             updated_config = MuseConfig(
                 vocal_tracks=config.vocal_tracks if config else [],
                 category_overrides=category_overrides,
@@ -386,14 +395,6 @@ def align_and_distribute_lyrics(
         AlignmentError: If alignment fails for any reason (no vocal tracks,
             audio extraction failure, alignment model failure, etc.)
     """
-    from .audio import (
-        combine_clips_to_audio,
-        extract_audio_clips,
-        select_vocal_tracks_with_config,
-    )
-    from .lyrics import format_timed_lines_as_lrc
-    from .lyrics_align import align_lyrics, words_to_lines
-
     # Step 1: Extract all audio clips from ALS
     try:
         all_clips = extract_audio_clips(als_path, bpm)
@@ -517,14 +518,6 @@ def transcribe_and_distribute_lyrics(
         AlignmentError: If transcription fails for any reason (no vocal tracks,
             audio extraction failure, transcription model failure, etc.)
     """
-    from .audio import (
-        combine_clips_to_audio,
-        extract_audio_clips,
-        select_vocal_tracks_with_config,
-    )
-    from .lyrics import distribute_timed_lyrics, format_segments_as_lrc
-    from .lyrics_align import segments_to_lines, transcribe_lyrics
-
     # Step 1: Extract all audio clips from ALS
     try:
         all_clips = extract_audio_clips(als_path, bpm)

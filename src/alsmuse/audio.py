@@ -13,10 +13,19 @@ from __future__ import annotations
 import contextlib
 import logging
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from xml.etree.ElementTree import Element
 
+import click
+import numpy as np
+import questionary
+import soundfile as sf  # type: ignore[import-untyped]
+import torch  # type: ignore[import-untyped]
+import torchaudio  # type: ignore[import-untyped]
+
+from .config import MuseConfig, load_config, save_config
 from .models import AudioClipRef
 from .parser import extract_track_name, get_track_elements, parse_als_xml
 
@@ -372,10 +381,6 @@ def _get_target_sample_rate(clips: list[AudioClipRef]) -> int:
     Returns:
         The most common sample rate among the clips.
     """
-    from collections import Counter
-
-    import soundfile as sf  # type: ignore[import-untyped]
-
     rates: list[int] = []
     for clip in clips:
         try:
@@ -407,9 +412,6 @@ def _resample_audio(
     Returns:
         Resampled audio as numpy array.
     """
-    import torch  # type: ignore[import-untyped]
-    import torchaudio  # type: ignore[import-untyped]
-
     # Convert to torch tensor
     # torchaudio expects (channels, samples) format
     tensor = (
@@ -461,15 +463,6 @@ def combine_clips_to_audio(
         ValueError: If clips list is empty.
         RuntimeError: If soundfile is not installed.
     """
-    try:
-        import numpy as np
-        import soundfile as sf
-    except ImportError as e:
-        raise RuntimeError(
-            "soundfile is required for audio combination. "
-            "Install with: pip install 'alsmuse[align]'"
-        ) from e
-
     if not clips:
         raise ValueError("No clips to combine")
 
@@ -574,9 +567,6 @@ def split_audio_on_silence(
         List of (segment_path, original_start_time, original_end_time) tuples.
         Times are in seconds relative to the original audio file.
     """
-    import numpy as np
-    import soundfile as sf
-
     # Read audio
     audio, sample_rate = sf.read(str(audio_path), dtype="float32")
 
@@ -694,16 +684,6 @@ def prompt_track_selection(
         click.Abort: If user cancels selection.
         RuntimeError: If questionary is not installed.
     """
-    import click
-
-    try:
-        import questionary
-    except ImportError as e:
-        raise RuntimeError(
-            "questionary is required for interactive track selection. "
-            "Install with: pip install 'alsmuse[align]'"
-        ) from e
-
     if not track_names:
         return []
 
@@ -751,8 +731,6 @@ def select_vocal_tracks(
     Returns:
         Filtered list of clips from selected tracks, sorted by start time.
     """
-    import click
-
     # Explicit selection via CLI (highest priority)
     if explicit_tracks:
         explicit_lower = {t.lower() for t in explicit_tracks}
@@ -824,8 +802,6 @@ def select_vocal_tracks_with_config(
     Returns:
         Tuple of (selected clips, selected track names).
     """
-    from .config import MuseConfig, load_config, save_config
-
     # Load existing config
     config = load_config(als_path)
     config_tracks = config.vocal_tracks if config else None
@@ -872,14 +848,14 @@ def check_alignment_dependencies() -> list[str]:
     has_stable_ts = False
 
     try:
-        import mlx_whisper  # type: ignore[import-not-found,import-untyped]  # noqa: F401
+        import mlx_whisper  # type: ignore[import-not-found,import-untyped]  # noqa: F401,PLC0415
 
         has_mlx_whisper = True
     except ImportError:
         pass
 
     try:
-        import stable_whisper  # type: ignore[import-not-found,import-untyped]  # noqa: F401
+        import stable_whisper  # type: ignore[import-not-found,import-untyped]  # noqa: F401,PLC0415
 
         has_stable_ts = True
     except ImportError:
@@ -894,7 +870,7 @@ def check_alignment_dependencies() -> list[str]:
 
     # Check soundfile
     try:
-        import soundfile  # type: ignore[import-not-found,import-untyped]  # noqa: F401
+        import soundfile  # type: ignore[import-not-found,import-untyped]  # noqa: F401,PLC0415
     except ImportError:
         errors.append("soundfile not installed. Run: pip install 'alsmuse[align]'")
 

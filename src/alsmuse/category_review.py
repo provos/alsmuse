@@ -12,6 +12,9 @@ from pathlib import Path
 import click
 import questionary
 
+from .config import MuseConfig, load_config, save_config
+from .events import categorize_all_tracks, get_available_categories
+
 # Sentinel values for menu navigation
 _DONE_SENTINEL = "__done__"
 _BACK_SENTINEL = "__back__"
@@ -174,9 +177,6 @@ def run_interactive_setup(
     Returns:
         Tuple of (category_overrides, vocal_tracks).
     """
-    from .config import MuseConfig, load_config, save_config
-    from .events import categorize_all_tracks, get_available_categories
-
     # Load existing config
     config = load_config(als_path)
     existing_overrides = config.category_overrides if config else {}

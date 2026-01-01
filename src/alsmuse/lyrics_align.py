@@ -28,9 +28,12 @@ Key Functions:
 from __future__ import annotations
 
 import re
+import shutil
+import tempfile
 import unicodedata
 from pathlib import Path
 
+from .audio import split_audio_on_silence
 from .exceptions import AlignmentError
 from .models import TimedLine, TimedSegment, TimedWord
 
@@ -51,7 +54,7 @@ def get_compute_device() -> str:
         AlignmentError: If PyTorch (torch) is not installed.
     """
     try:
-        import torch  # type: ignore[import-not-found]
+        import torch  # type: ignore[import-not-found]  # noqa: PLC0415
     except ImportError as e:
         raise AlignmentError(
             "PyTorch (torch) is not installed. "
@@ -257,8 +260,8 @@ def align_lyrics(
         AlignmentError: If stable-ts is not installed or alignment fails.
     """
     try:
-        import stable_whisper  # type: ignore[import-not-found,import-untyped]
-        import torch  # noqa: F401  # type: ignore[import-not-found,import-untyped]
+        import stable_whisper  # type: ignore[import-not-found,import-untyped]  # noqa: PLC0415
+        import torch  # noqa: F401,PLC0415  # type: ignore[import-not-found,import-untyped]
     except ImportError as e:
         raise AlignmentError(
             "stable-ts is not installed. "
@@ -353,7 +356,7 @@ def _transcribe_with_mlx_whisper(
         ImportError: If mlx-whisper is not installed.
         AlignmentError: If transcription fails.
     """
-    import mlx_whisper  # type: ignore[import-not-found,import-untyped]
+    import mlx_whisper  # type: ignore[import-not-found,import-untyped]  # noqa: PLC0415
 
     # Map model size to HuggingFace repo
     model_map = {
@@ -426,8 +429,8 @@ def _transcribe_with_stable_ts(
         ImportError: If stable-ts is not installed.
         AlignmentError: If transcription fails.
     """
-    import stable_whisper  # type: ignore[import-not-found,import-untyped]
-    import torch  # noqa: F401  # type: ignore[import-not-found,import-untyped]
+    import stable_whisper  # type: ignore[import-not-found,import-untyped]  # noqa: PLC0415
+    import torch  # noqa: F401,PLC0415  # type: ignore[import-not-found,import-untyped]
 
     # Select optimal compute device (GPU/MPS/CPU)
     device = get_compute_device()
@@ -538,11 +541,6 @@ def transcribe_lyrics(
     Raises:
         AlignmentError: If no transcription backend is available.
     """
-    import shutil
-    import tempfile
-
-    from .audio import split_audio_on_silence
-
     # Create temp directory for segments if not provided
     cleanup_dir = segment_dir is None
     if segment_dir is None:

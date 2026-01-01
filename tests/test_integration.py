@@ -1040,7 +1040,9 @@ class TestLanguageAndModelPassing:
             return [expected_segment]
 
         with (
-            patch("alsmuse.audio.split_audio_on_silence", return_value=mock_audio_segments),
+            patch(
+                "alsmuse.lyrics_align.split_audio_on_silence", return_value=mock_audio_segments
+            ),
             patch(
                 "alsmuse.lyrics_align._transcribe_single_segment",
                 side_effect=mock_transcribe,
@@ -1088,7 +1090,9 @@ class TestLanguageAndModelPassing:
             return [expected_segment]
 
         with (
-            patch("alsmuse.audio.split_audio_on_silence", return_value=mock_audio_segments),
+            patch(
+                "alsmuse.lyrics_align.split_audio_on_silence", return_value=mock_audio_segments
+            ),
             patch(
                 "alsmuse.lyrics_align._transcribe_single_segment",
                 side_effect=mock_transcribe,

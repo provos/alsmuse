@@ -996,20 +996,23 @@ class TestTranscribeLyrics:
 
     def test_raises_error_when_no_backend_installed(self) -> None:
         """Raises AlignmentError when no transcription backend is installed."""
+        import importlib
+
+        from alsmuse import lyrics_align
+
         # Mock split_audio_on_silence to return one segment
         mock_segments = [(Path("/fake/segment_0.wav"), 0.0, 5.0)]
 
-        with (
-            patch("alsmuse.audio.split_audio_on_silence", return_value=mock_segments),
-            patch.dict("sys.modules", {"stable_whisper": None, "mlx_whisper": None}),
-        ):
-            import importlib
-
-            from alsmuse import lyrics_align
-
+        with patch.dict("sys.modules", {"stable_whisper": None, "mlx_whisper": None}):
             importlib.reload(lyrics_align)
 
-            with pytest.raises(AlignmentError, match="No transcription backend"):
+            # Patch after reload so the new module reference is patched
+            with (
+                patch(
+                    "alsmuse.lyrics_align.split_audio_on_silence", return_value=mock_segments
+                ),
+                pytest.raises(AlignmentError, match="No transcription backend"),
+            ):
                 lyrics_align.transcribe_lyrics(
                     audio_path=Path("/fake/audio.wav"),
                     valid_ranges=[(0.0, 10.0)],
@@ -1033,7 +1036,7 @@ class TestTranscribeLyrics:
 
         with (
             patch(
-                "alsmuse.audio.split_audio_on_silence",
+                "alsmuse.lyrics_align.split_audio_on_silence",
                 return_value=mock_audio_segments,
             ),
             patch(
@@ -1087,7 +1090,7 @@ class TestTranscribeLyrics:
 
         with (
             patch(
-                "alsmuse.audio.split_audio_on_silence",
+                "alsmuse.lyrics_align.split_audio_on_silence",
                 return_value=mock_audio_segments,
             ),
             patch(
@@ -1110,7 +1113,7 @@ class TestTranscribeLyrics:
     def test_empty_audio_returns_empty_result(self) -> None:
         """No segments from silence detection returns empty result."""
         with patch(
-            "alsmuse.audio.split_audio_on_silence",
+            "alsmuse.lyrics_align.split_audio_on_silence",
             return_value=[],  # No audio segments
         ):
             from alsmuse import lyrics_align
@@ -1154,7 +1157,7 @@ class TestTranscribeLyrics:
 
         with (
             patch(
-                "alsmuse.audio.split_audio_on_silence",
+                "alsmuse.lyrics_align.split_audio_on_silence",
                 return_value=mock_audio_segments,
             ),
             patch(
@@ -1179,7 +1182,7 @@ class TestTranscribeLyrics:
 
         with (
             patch(
-                "alsmuse.audio.split_audio_on_silence",
+                "alsmuse.lyrics_align.split_audio_on_silence",
                 return_value=mock_audio_segments,
             ),
             patch(
