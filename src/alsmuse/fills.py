@@ -1,10 +1,14 @@
 """Drum fill detection for ALSmuse.
 
-This module detects drum fills by analyzing coordinated density spikes
-across multiple drum components before section changes. A fill is identified
-when two or more drum sub-categories (e.g., toms, cymbals, snare) spike
-significantly above their baseline density in the bars leading up to
-a section transition.
+This module detects drum fills by analyzing density spikes in drum tracks
+before section changes. A fill is identified when any drum sub-category
+spikes significantly above its baseline density in the bars leading up
+to a section transition.
+
+Note: Many drum racks don't use GM drum mapping, so pitches often map to
+'unknown'. We detect fills based on any significant spike rather than
+requiring multiple sub-categories, since the sub-category granularity
+is less reliable with non-GM mappings.
 """
 
 from dataclasses import dataclass
@@ -15,7 +19,7 @@ from .models import MidiClipContent, Section
 
 # Detection parameters
 DENSITY_SPIKE_THRESHOLD = 3.0  # 3x baseline = spike
-MIN_COMPONENTS_FOR_FILL = 2  # need at least 2 drum components spiking
+MIN_COMPONENTS_FOR_FILL = 1  # any sub-category spiking counts
 FILL_WINDOW_BEATS = 4.0  # analyze in 1-bar windows
 SECTION_PROXIMITY_BEATS = 8.0  # look 2 bars before section changes
 
