@@ -325,6 +325,9 @@ def detect_events_from_clip_contents(
         return []
 
     category = categorize_track(track_name)
+    if category == "other":
+        return []
+
     activity = detect_midi_activity(clip_contents, resolution_beats)
     return detect_track_events(track_name, activity, category)
 
@@ -420,6 +423,9 @@ def detect_events_from_clip_contents_phrase_aligned(
         return []
 
     category = categorize_track(track_name)
+    if category == "other":
+        return []
+
     phrase_activity = detect_phrase_activity(phrases, clip_contents)
     return detect_events_from_phrase_activity(track_name, phrase_activity, category)
 
