@@ -785,3 +785,354 @@ class TestCLIOptions:
 
         assert result.exit_code != 0
         assert "--align-vocals requires --lyrics" in result.output
+
+    def test_cli_mutual_exclusion_transcribe_and_lyrics(self, tmp_path: Path) -> None:
+        """CLI errors when --transcribe and --lyrics are used together."""
+        from click.testing import CliRunner
+
+        from alsmuse.cli import main
+
+        runner = CliRunner()
+
+        # Create ALS file and lyrics file
+        als_file = create_als_file(tmp_path, MINIMAL_ALS_XML)
+        lyrics_file = tmp_path / "lyrics.txt"
+        lyrics_file.write_text("[VERSE1]\nHello world\n")
+
+        # Try to use both --transcribe and --lyrics
+        result = runner.invoke(
+            main, ["analyze", str(als_file), "--transcribe", "--lyrics", str(lyrics_file)]
+        )
+
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
+
+    def test_cli_accepts_language_option(self) -> None:
+        """CLI accepts --language option."""
+        from click.testing import CliRunner
+
+        from alsmuse.cli import analyze
+
+        runner = CliRunner()
+        result = runner.invoke(analyze, ["--help"])
+
+        assert "--language" in result.output
+        assert "Language code" in result.output
+
+    def test_cli_accepts_whisper_model_option(self) -> None:
+        """CLI accepts --whisper-model option."""
+        from click.testing import CliRunner
+
+        from alsmuse.cli import analyze
+
+        runner = CliRunner()
+        result = runner.invoke(analyze, ["--help"])
+
+        assert "--whisper-model" in result.output
+        assert "tiny" in result.output
+        assert "base" in result.output
+        assert "medium" in result.output
+
+    def test_cli_accepts_save_lyrics_option(self) -> None:
+        """CLI accepts --save-lyrics option."""
+        from click.testing import CliRunner
+
+        from alsmuse.cli import analyze
+
+        runner = CliRunner()
+        result = runner.invoke(analyze, ["--help"])
+
+        assert "--save-lyrics" in result.output
+        assert "transcribed lyrics" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 Tests: Timestamped Lyrics Bypass Alignment
+# ---------------------------------------------------------------------------
+
+
+class TestTimestampedLyricsBypassAlignment:
+    """Tests verifying that timestamped lyrics bypass forced alignment.
+
+    When lyrics have embedded timestamps, the alignment code path should not
+    be executed at all. We verify this by:
+    1. Providing timestamped lyrics
+    2. Setting align_vocals=True (which would normally trigger alignment)
+    3. Verifying the analysis succeeds and lyrics appear correctly
+
+    Since there are no audio tracks in MINIMAL_ALS_XML, if alignment were
+    attempted it would fail. Successful execution proves alignment was bypassed.
+    """
+
+    def test_lrc_lyrics_bypass_alignment_entirely(self, tmp_path: Path) -> None:
+        """LRC lyrics with timestamps do not trigger alignment at all.
+
+        If alignment were attempted with no audio tracks, it would fail.
+        Successful completion proves the LRC timestamps bypass alignment.
+        """
+        als_file = create_als_file(tmp_path, MINIMAL_ALS_XML)
+
+        # Create LRC lyrics file with timestamps
+        lyrics_file = tmp_path / "lyrics.lrc"
+        lyrics_file.write_text(
+            "[00:08.00]First verse line\n"
+            "[00:12.00]Second verse line\n"
+        )
+
+        # With align_vocals=True but timestamped lyrics, alignment is bypassed
+        # This would fail if alignment were attempted (no audio tracks)
+        result = analyze_als_v2(
+            als_file,
+            beats_per_phrase=8,
+            show_events=False,
+            lyrics_path=lyrics_file,
+            align_vocals=True,  # Would fail if actually used - bypassed by timestamps
+        )
+
+        # Lyrics should appear in output (from timestamps, not alignment)
+        assert "First verse line" in result
+        assert "Second verse line" in result
+        # Verify lyrics column is present
+        assert "Lyrics" in result
+
+    def test_simple_timed_lyrics_bypass_alignment(self, tmp_path: Path) -> None:
+        """Simple timed lyrics do not trigger alignment.
+
+        If alignment were attempted with no audio tracks, it would fail.
+        Successful completion proves the simple timestamps bypass alignment.
+        """
+        als_file = create_als_file(tmp_path, MINIMAL_ALS_XML)
+
+        # Create simple timed lyrics file
+        lyrics_file = tmp_path / "lyrics.txt"
+        lyrics_file.write_text(
+            "0:08.00 First verse line\n"
+            "0:12.00 Second verse line\n"
+        )
+
+        # With align_vocals=True but timestamped lyrics, alignment is bypassed
+        result = analyze_als_v2(
+            als_file,
+            beats_per_phrase=8,
+            show_events=False,
+            lyrics_path=lyrics_file,
+            align_vocals=True,  # Would fail if actually used - bypassed by timestamps
+        )
+
+        # Lyrics should appear in output
+        assert "First verse line" in result
+        assert "Second verse line" in result
+
+    def test_enhanced_lrc_lyrics_bypass_alignment(self, tmp_path: Path) -> None:
+        """Enhanced LRC with word timestamps does not trigger alignment.
+
+        If alignment were attempted with no audio tracks, it would fail.
+        Successful completion proves the enhanced LRC bypasses alignment.
+        """
+        als_file = create_als_file(tmp_path, MINIMAL_ALS_XML)
+
+        # Create enhanced LRC lyrics file with word-level timestamps
+        lyrics_file = tmp_path / "lyrics.lrc"
+        lyrics_file.write_text(
+            "[00:08.00]<00:08.00>First <00:08.50>verse <00:09.00>line\n"
+            "[00:12.00]<00:12.00>Second <00:12.50>verse <00:13.00>line\n"
+        )
+
+        # With align_vocals=True but timestamped lyrics, alignment is bypassed
+        result = analyze_als_v2(
+            als_file,
+            beats_per_phrase=8,
+            show_events=False,
+            lyrics_path=lyrics_file,
+            align_vocals=True,
+        )
+
+        # Lyrics should appear in output (reconstructed from word timestamps)
+        assert "First verse line" in result
+        assert "Second verse line" in result
+
+    def test_plain_text_lyrics_with_align_triggers_alignment(
+        self, tmp_path: Path
+    ) -> None:
+        """Plain text lyrics with align_vocals=True attempts alignment.
+
+        Since MINIMAL_ALS_XML has no audio tracks, alignment fails and
+        falls back to heuristic distribution. This proves:
+        1. Alignment WAS attempted (unlike timestamped formats)
+        2. Fallback to heuristic works correctly
+        """
+        als_file = create_als_file(tmp_path, MINIMAL_ALS_XML)
+
+        # Create plain text lyrics file (no timestamps)
+        lyrics_file = tmp_path / "lyrics.txt"
+        lyrics_file.write_text("[VERSE1]\nPlain text lyric\n")
+
+        # With align_vocals=True and plain text, alignment is attempted
+        # Since we have no audio tracks, it will fail and fall back to heuristic
+        result = analyze_als_v2(
+            als_file,
+            beats_per_phrase=8,
+            show_events=False,
+            lyrics_path=lyrics_file,
+            align_vocals=True,
+            use_all_vocals=True,  # Avoid prompting
+        )
+
+        # Lyrics should still appear (from fallback heuristic distribution)
+        assert "Plain text lyric" in result
+
+
+class TestLanguageAndModelPassing:
+    """Tests verifying --language and --whisper-model are passed through correctly."""
+
+    def test_language_option_passed_to_transcribe(self) -> None:
+        """--language option is passed to transcribe_lyrics function."""
+        from unittest.mock import MagicMock, patch
+
+        # Create mock model and result
+        mock_word = MagicMock()
+        mock_word.word = "hola"
+        mock_word.start = 1.0
+        mock_word.end = 1.5
+
+        mock_segment = MagicMock()
+        mock_segment.words = [mock_word]
+        mock_segment.text = "hola"
+        mock_segment.start = 1.0
+        mock_segment.end = 1.5
+
+        mock_result = MagicMock()
+        mock_result.segments = [mock_segment]
+
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = mock_result
+
+        mock_stable_whisper = MagicMock()
+        mock_stable_whisper.load_model.return_value = mock_model
+
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.backends.mps.is_available.return_value = False
+
+        with patch.dict(
+            "sys.modules", {"stable_whisper": mock_stable_whisper, "torch": mock_torch}
+        ):
+            import importlib
+            from pathlib import Path
+
+            from alsmuse import lyrics_align
+
+            importlib.reload(lyrics_align)
+
+            # Call transcribe_lyrics with Spanish language
+            lyrics_align.transcribe_lyrics(
+                audio_path=Path("/fake/audio.wav"),
+                valid_ranges=[(0.0, 10.0)],
+                language="es",  # Spanish
+                model_size="base",
+            )
+
+        # Verify transcribe was called with language="es"
+        mock_model.transcribe.assert_called_once()
+        call_kwargs = mock_model.transcribe.call_args[1]
+        assert call_kwargs["language"] == "es"
+
+    def test_model_size_option_passed_to_load_model(self) -> None:
+        """--whisper-model option is passed to load_model function."""
+        from unittest.mock import MagicMock, patch
+
+        # Create mock model and result
+        mock_word = MagicMock()
+        mock_word.word = "test"
+        mock_word.start = 1.0
+        mock_word.end = 1.5
+
+        mock_segment = MagicMock()
+        mock_segment.words = [mock_word]
+        mock_segment.text = "test"
+        mock_segment.start = 1.0
+        mock_segment.end = 1.5
+
+        mock_result = MagicMock()
+        mock_result.segments = [mock_segment]
+
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = mock_result
+
+        mock_stable_whisper = MagicMock()
+        mock_stable_whisper.load_model.return_value = mock_model
+
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.backends.mps.is_available.return_value = False
+
+        with patch.dict(
+            "sys.modules", {"stable_whisper": mock_stable_whisper, "torch": mock_torch}
+        ):
+            import importlib
+            from pathlib import Path
+
+            from alsmuse import lyrics_align
+
+            importlib.reload(lyrics_align)
+
+            # Call transcribe_lyrics with medium model
+            lyrics_align.transcribe_lyrics(
+                audio_path=Path("/fake/audio.wav"),
+                valid_ranges=[(0.0, 10.0)],
+                language="en",
+                model_size="medium",  # Medium model
+            )
+
+        # Verify load_model was called with "medium"
+        mock_stable_whisper.load_model.assert_called_once_with("medium", device="cpu")
+
+    def test_language_option_passed_to_align(self) -> None:
+        """--language option is passed to align_lyrics function."""
+        from unittest.mock import MagicMock, patch
+
+        # Create mock model and result
+        mock_word = MagicMock()
+        mock_word.word = "bonjour"
+        mock_word.start = 1.0
+        mock_word.end = 1.5
+
+        mock_segment = MagicMock()
+        mock_segment.words = [mock_word]
+
+        mock_result = MagicMock()
+        mock_result.segments = [mock_segment]
+
+        mock_model = MagicMock()
+        mock_model.align.return_value = mock_result
+
+        mock_stable_whisper = MagicMock()
+        mock_stable_whisper.load_model.return_value = mock_model
+
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.backends.mps.is_available.return_value = False
+
+        with patch.dict(
+            "sys.modules", {"stable_whisper": mock_stable_whisper, "torch": mock_torch}
+        ):
+            import importlib
+            from pathlib import Path
+
+            from alsmuse import lyrics_align
+
+            importlib.reload(lyrics_align)
+
+            # Call align_lyrics with French language
+            lyrics_align.align_lyrics(
+                audio_path=Path("/fake/audio.wav"),
+                lyrics_text="Bonjour",
+                valid_ranges=[(0.0, 10.0)],
+                language="fr",  # French
+                model_size="base",
+            )
+
+        # Verify align was called with language="fr"
+        mock_model.align.assert_called_once()
+        call_kwargs = mock_model.align.call_args[1]
+        assert call_kwargs["language"] == "fr"

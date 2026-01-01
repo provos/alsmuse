@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 from xml.etree.ElementTree import Element
 
 from .models import AudioClipRef
@@ -354,8 +355,9 @@ def _get_target_sample_rate(clips: list[AudioClipRef]) -> int:
     Returns:
         The most common sample rate among the clips.
     """
-    import soundfile as sf
     from collections import Counter
+
+    import soundfile as sf  # type: ignore[import-untyped]
 
     rates: list[int] = []
     for clip in clips:
@@ -374,10 +376,10 @@ def _get_target_sample_rate(clips: list[AudioClipRef]) -> int:
 
 
 def _resample_audio(
-    audio: "np.ndarray",  # type: ignore[name-defined]
+    audio: Any,
     orig_sr: int,
     target_sr: int,
-) -> "np.ndarray":  # type: ignore[name-defined]
+) -> Any:
     """Resample audio using torchaudio (fast, GPU-capable).
 
     Args:
@@ -388,16 +390,16 @@ def _resample_audio(
     Returns:
         Resampled audio as numpy array.
     """
-    import numpy as np
-    import torch
-    import torchaudio
+    import torch  # type: ignore[import-untyped]
+    import torchaudio  # type: ignore[import-untyped]
 
     # Convert to torch tensor
     # torchaudio expects (channels, samples) format
-    if audio.ndim == 1:
-        tensor = torch.from_numpy(audio).unsqueeze(0)  # (1, samples)
-    else:
-        tensor = torch.from_numpy(audio).T  # (channels, samples)
+    tensor = (
+        torch.from_numpy(audio).unsqueeze(0)  # (1, samples)
+        if audio.ndim == 1
+        else torch.from_numpy(audio).T  # (channels, samples)
+    )
 
     # Resample
     resampler = torchaudio.transforms.Resample(orig_sr, target_sr)
@@ -648,7 +650,7 @@ def check_alignment_dependencies() -> list[str]:
 
     # Check stable-ts
     try:
-        import stable_whisper  # noqa: F401
+        import stable_whisper  # type: ignore[import-not-found,import-untyped]  # noqa: F401
     except ImportError:
         errors.append(
             "stable-ts not installed. Run: pip install 'alsmuse[align]'"
@@ -656,7 +658,7 @@ def check_alignment_dependencies() -> list[str]:
 
     # Check soundfile
     try:
-        import soundfile  # noqa: F401
+        import soundfile  # type: ignore[import-not-found,import-untyped]  # noqa: F401
     except ImportError:
         errors.append(
             "soundfile not installed. Run: pip install 'alsmuse[align]'"

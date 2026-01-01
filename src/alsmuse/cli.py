@@ -39,12 +39,14 @@ def main() -> None:
     "--lyrics",
     type=click.Path(exists=True, path_type=Path),
     default=None,
-    help="Path to lyrics file with [SECTION] headers.",
+    help="Path to lyrics file. Supports plain text with [SECTION] headers, "
+    "LRC format, or simple timed format. Timestamped formats bypass alignment.",
 )
 @click.option(
-    "--align-vocals",
-    is_flag=True,
-    help="Use forced alignment for precise lyrics timing (requires stable-ts).",
+    "--align-vocals/--no-align-vocals",
+    default=None,
+    help="Use forced alignment for precise lyrics timing (requires stable-ts). "
+    "Enabled by default when --lyrics is specified.",
 )
 @click.option(
     "--vocal-track",
@@ -57,15 +59,49 @@ def main() -> None:
     is_flag=True,
     help="Use all detected vocal tracks without prompting.",
 )
+@click.option(
+    "--save-vocals",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Save combined vocals to this path for validation.",
+)
+@click.option(
+    "--transcribe",
+    is_flag=True,
+    help="Transcribe lyrics from vocal audio using ASR. Cannot be used with --lyrics.",
+)
+@click.option(
+    "--language",
+    type=str,
+    default="en",
+    help="Language code for transcription/alignment (default: en). Examples: en, es, fr, de, ja.",
+)
+@click.option(
+    "--whisper-model",
+    type=click.Choice(["tiny", "base", "small", "medium", "large"]),
+    default="base",
+    help="Whisper model size for transcription/alignment (default: base).",
+)
+@click.option(
+    "--save-lyrics",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Save transcribed lyrics to this file for review/editing.",
+)
 def analyze(
     als_file: Path,
     structure_track: str,
     phrase_bars: int,
     show_events: bool,
     lyrics: Path | None,
-    align_vocals: bool,
+    align_vocals: bool | None,
     vocal_track: tuple[str, ...],
     all_vocals: bool,
+    save_vocals: Path | None,
+    transcribe: bool,
+    language: str,
+    whisper_model: str,
+    save_lyrics: Path | None,
 ) -> None:
     """Analyze an Ableton Live Set file.
 
@@ -73,10 +109,44 @@ def analyze(
     Track enter/exit events are detected by default.
     Use --no-events to disable event detection.
 
-    When --align-vocals is specified, lyrics are aligned to audio using
-    forced alignment with stable-ts. This requires the alignment dependencies
-    to be installed (pip install 'alsmuse[align]').
+    LYRICS SUPPORT:
+
+    The tool supports multiple lyrics input methods:
+
+    1. Timestamped lyrics (LRC, simple timed, enhanced LRC):
+       When a lyrics file contains timestamps, they are used directly
+       without requiring forced alignment. No audio extraction needed.
+
+       Example formats:
+         LRC: [00:12.34]First line
+         Simple: 0:12.34 First line
+         Enhanced: [00:12.34]<00:12.34>First <00:12.80>line
+
+    2. Plain text lyrics with forced alignment:
+       When --lyrics points to a plain text file with [SECTION] headers,
+       forced alignment with stable-ts is used (requires alignment deps).
+
+    3. ASR transcription (--transcribe):
+       Automatically transcribe lyrics from vocal audio using Whisper.
+       Requires alignment dependencies: pip install 'alsmuse[align]'
+
+    MUTUAL EXCLUSION:
+
+    --transcribe and --lyrics cannot be used together. Use one or the other.
     """
+    # Validate mutual exclusion: --transcribe and --lyrics cannot be used together
+    if transcribe and lyrics is not None:
+        click.echo(
+            "Error: --transcribe and --lyrics are mutually exclusive. "
+            "Use one or the other.",
+            err=True,
+        )
+        sys.exit(1)
+
+    # Default align_vocals to True when lyrics is provided
+    if align_vocals is None:
+        align_vocals = lyrics is not None
+
     # Validate alignment options
     if align_vocals:
         # Check that lyrics is provided first (before checking dependencies)
@@ -88,6 +158,15 @@ def analyze(
             sys.exit(1)
 
         # Then check for required dependencies
+        errors = check_alignment_dependencies()
+        if errors:
+            for err in errors:
+                click.echo(f"Error: {err}", err=True)
+            sys.exit(1)
+
+    # Validate transcription options
+    if transcribe:
+        # Check for required dependencies
         errors = check_alignment_dependencies()
         if errors:
             for err in errors:
@@ -110,6 +189,11 @@ def analyze(
             align_vocals=align_vocals,
             vocal_tracks=vocal_tracks,
             use_all_vocals=all_vocals,
+            save_vocals_path=save_vocals,
+            transcribe=transcribe,
+            save_lyrics_path=save_lyrics,
+            language=language,
+            model_size=whisper_model,
         )
         click.echo(result)
     except ParseError as e:

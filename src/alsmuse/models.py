@@ -5,8 +5,27 @@ analyzing Ableton Live Set files and extracting music structure.
 """
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Literal
+
+
+class LyricsFormat(Enum):
+    """Format of lyrics file.
+
+    Used to determine how to parse lyrics files based on their structure.
+
+    Values:
+        PLAIN: No timestamps, plain text with optional section headers.
+        LRC: Standard LRC format with [mm:ss.xx] line timestamps.
+        LRC_ENHANCED: LRC with word-level <mm:ss.xx> timestamps.
+        SIMPLE_TIMED: Simple format with m:ss.xx at line start.
+    """
+
+    PLAIN = "plain"
+    LRC = "lrc"
+    LRC_ENHANCED = "lrc_enhanced"
+    SIMPLE_TIMED = "simple_timed"
 
 
 @dataclass(frozen=True)
@@ -290,4 +309,25 @@ class TimedLine:
     text: str
     start: float  # seconds (from first word)
     end: float  # seconds (from last word)
+    words: tuple[TimedWord, ...]
+
+
+@dataclass(frozen=True)
+class TimedSegment:
+    """A transcribed segment with word-level timing.
+
+    Represents a natural phrase/sentence boundary as detected by Whisper.
+    These segments are more reliable than heuristic-based line breaking
+    because they leverage Whisper's natural language understanding.
+
+    Attributes:
+        text: The full segment text.
+        start: Start timestamp in seconds.
+        end: End timestamp in seconds.
+        words: Tuple of TimedWord objects in this segment.
+    """
+
+    text: str
+    start: float  # seconds
+    end: float  # seconds
     words: tuple[TimedWord, ...]

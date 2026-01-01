@@ -3,13 +3,437 @@
 This module provides functionality for parsing lyrics files with section
 headers and distributing lyrics across phrases within each section.
 
-It includes both heuristic distribution (based on section structure) and
-time-based distribution (using forced alignment timestamps).
+Lyrics Distribution Modes:
+    - **Heuristic distribution**: Distributes lyrics evenly across phrases
+      within each section based on section structure.
+    - **Time-based distribution**: Uses precise timestamps (from forced
+      alignment or pre-timestamped files) to place lyrics in the correct
+      phrases based on when they are sung.
+
+Supported Lyrics Formats:
+    - **Plain text**: Optional [SECTION] headers, uses heuristic distribution.
+    - **LRC format**: Standard karaoke format [mm:ss.xx]text, line-level timing.
+    - **Simple timed**: m:ss.xx text at line start, easy to create manually.
+    - **Enhanced LRC**: [mm:ss.xx]<mm:ss.xx>word <mm:ss.xx>word, word-level timing.
+
+When timestamped lyrics (LRC, simple timed, or enhanced LRC) are provided,
+the timestamps are used directly without requiring forced alignment. This
+is useful when you already have pre-timed lyrics from karaoke software,
+other transcription tools, or manual annotation.
+
+Key Functions:
+    - detect_lyrics_format: Auto-detect format from file content.
+    - parse_lyrics_file_auto: Parse with auto-detection, returning appropriate type.
+    - distribute_lyrics: Heuristic distribution for plain text lyrics.
+    - distribute_timed_lyrics: Time-based distribution for timestamped lyrics.
 """
 
+import logging
+import re
 from pathlib import Path
 
-from .models import Phrase, TimedLine
+from .models import LyricsFormat, Phrase, TimedLine, TimedWord
+
+logger = logging.getLogger(__name__)
+
+# Regex patterns for format detection and parsing
+
+# LRC timestamp pattern: [mm:ss.xx] or [mm:ss.xxx]
+# Matches: [00:12.34], [01:23.456], etc.
+LRC_TIMESTAMP_PATTERN = re.compile(r"^\[(\d{2}):(\d{2})\.(\d{2,3})\]")
+
+# LRC metadata pattern: [tag:value]
+# Matches: [ar:Artist], [ti:Title], [al:Album], etc.
+LRC_METADATA_PATTERN = re.compile(r"^\[([a-z]{2,}):.*\]$", re.IGNORECASE)
+
+# Simple timed pattern: m:ss.xx or mm:ss.xx at line start followed by space
+# Matches: 0:12.34 text, 01:23.45 text, 12:34.56 text
+SIMPLE_TIMED_PATTERN = re.compile(r"^(\d{1,2}):(\d{2})\.(\d{2,3})\s+(.+)$")
+
+# Enhanced LRC word timestamp: <mm:ss.xx> or <mm:ss.xxx>
+# Matches: <00:12.34>, <01:23.456>, etc.
+ENHANCED_WORD_PATTERN = re.compile(r"<(\d{2}):(\d{2})\.(\d{2,3})>")
+
+
+def _parse_timestamp_components(
+    minutes: str, seconds: str, centis: str
+) -> float:
+    """Convert timestamp components to seconds.
+
+    Args:
+        minutes: Minutes as string (e.g., "01", "12").
+        seconds: Seconds as string (e.g., "23", "59").
+        centis: Centiseconds or milliseconds as string (e.g., "34", "567").
+
+    Returns:
+        Time in seconds as float.
+    """
+    mins = int(minutes)
+    secs = int(seconds)
+    # Handle both centiseconds (2 digits) and milliseconds (3 digits)
+    frac = int(centis) / 100.0 if len(centis) == 2 else int(centis) / 1000.0
+    return mins * 60.0 + secs + frac
+
+
+def detect_lyrics_format(content: str) -> LyricsFormat:
+    """Detect the format of lyrics content.
+
+    Analyzes the content to determine which lyrics format is being used.
+    The detection is based on characteristic patterns of each format.
+
+    Detection order:
+    1. Enhanced LRC: Contains both [mm:ss.xx] and <mm:ss.xx> patterns
+    2. Standard LRC: Lines start with [mm:ss.xx] pattern
+    3. Simple timed: Lines start with m:ss.xx or mm:ss.xx pattern
+    4. Plain: Default when no timestamp patterns are detected
+
+    Args:
+        content: Raw lyrics file content.
+
+    Returns:
+        LyricsFormat enum indicating the detected format.
+
+    Examples:
+        >>> detect_lyrics_format("[00:12.34]Hello world")
+        LyricsFormat.LRC
+        >>> detect_lyrics_format("0:12.34 Hello world")
+        LyricsFormat.SIMPLE_TIMED
+        >>> detect_lyrics_format("[00:12.34]<00:12.34>Hello <00:12.80>world")
+        LyricsFormat.LRC_ENHANCED
+        >>> detect_lyrics_format("Hello world")
+        LyricsFormat.PLAIN
+    """
+    lines = content.strip().split("\n")
+
+    has_lrc_timestamp = False
+    has_word_timestamp = False
+    has_simple_timestamp = False
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Skip LRC metadata tags like [ar:Artist], [ti:Title]
+        if LRC_METADATA_PATTERN.match(line):
+            continue
+
+        # Check for LRC timestamp at start of line
+        if LRC_TIMESTAMP_PATTERN.match(line):
+            has_lrc_timestamp = True
+            # Check for enhanced LRC word timestamps within the line
+            if ENHANCED_WORD_PATTERN.search(line):
+                has_word_timestamp = True
+
+        # Check for simple timed format
+        elif SIMPLE_TIMED_PATTERN.match(line):
+            has_simple_timestamp = True
+
+    # Determine format based on detected patterns
+    if has_lrc_timestamp and has_word_timestamp:
+        return LyricsFormat.LRC_ENHANCED
+    elif has_lrc_timestamp:
+        return LyricsFormat.LRC
+    elif has_simple_timestamp:
+        return LyricsFormat.SIMPLE_TIMED
+    else:
+        return LyricsFormat.PLAIN
+
+
+def parse_lrc_lyrics(content: str) -> list[TimedLine]:
+    """Parse LRC format lyrics into TimedLine objects.
+
+    Handles standard LRC format with line-level timestamps.
+    Multiple timestamps on the same line (for repeated lyrics)
+    generate separate TimedLine objects.
+
+    Metadata tags like [ar:Artist], [ti:Title], etc. are ignored.
+    Empty timestamps (e.g., [00:00.00] with no text) are skipped.
+
+    Args:
+        content: LRC format lyrics content.
+
+    Returns:
+        List of TimedLine with timestamps in seconds, sorted by start time.
+
+    Examples:
+        >>> lines = parse_lrc_lyrics("[00:12.34]First line\\n[00:15.67]Second line")
+        >>> lines[0].text
+        'First line'
+        >>> lines[0].start
+        12.34
+    """
+    result: list[TimedLine] = []
+
+    for line in content.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+
+        # Skip metadata tags
+        if LRC_METADATA_PATTERN.match(line):
+            continue
+
+        # Extract all timestamps from the line
+        timestamps: list[float] = []
+        remaining = line
+
+        while True:
+            match = LRC_TIMESTAMP_PATTERN.match(remaining)
+            if not match:
+                break
+            timestamp = _parse_timestamp_components(
+                match.group(1), match.group(2), match.group(3)
+            )
+            timestamps.append(timestamp)
+            remaining = remaining[match.end():]
+
+        # Get the text after all timestamps
+        text = remaining.strip()
+
+        # Skip empty lines (timestamps with no text)
+        if not text:
+            continue
+
+        # Create a TimedLine for each timestamp (handles repeated lyrics)
+        for ts in timestamps:
+            # For line-level timing, we don't have word timing
+            # Set end to start (will be refined when distributed to phrases)
+            result.append(
+                TimedLine(
+                    text=text,
+                    start=ts,
+                    end=ts,  # End time unknown for line-level LRC
+                    words=(),  # No word-level timing
+                )
+            )
+
+    # Sort by start time
+    result.sort(key=lambda line: line.start)
+    return result
+
+
+def parse_simple_timed_lyrics(content: str) -> list[TimedLine]:
+    """Parse simple timed format lyrics.
+
+    Parses lyrics where each line starts with a timestamp in the format
+    m:ss.xx or mm:ss.xx followed by a space and the lyrics text.
+
+    Args:
+        content: Simple timed lyrics content.
+
+    Returns:
+        List of TimedLine with timestamps in seconds, sorted by start time.
+
+    Examples:
+        >>> lines = parse_simple_timed_lyrics("0:12.34 First line\\n0:15.67 Second line")
+        >>> lines[0].text
+        'First line'
+        >>> lines[0].start
+        12.34
+    """
+    result: list[TimedLine] = []
+
+    for line in content.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+
+        match = SIMPLE_TIMED_PATTERN.match(line)
+        if not match:
+            # Line doesn't match simple timed format, skip with warning
+            logger.warning("Skipping line without valid timestamp: %s", line[:50])
+            continue
+
+        timestamp = _parse_timestamp_components(
+            match.group(1), match.group(2), match.group(3)
+        )
+        text = match.group(4).strip()
+
+        if not text:
+            continue
+
+        result.append(
+            TimedLine(
+                text=text,
+                start=timestamp,
+                end=timestamp,  # End time unknown for line-level timing
+                words=(),  # No word-level timing
+            )
+        )
+
+    # Sort by start time
+    result.sort(key=lambda line: line.start)
+    return result
+
+
+def parse_enhanced_lrc(content: str) -> list[TimedLine]:
+    """Parse enhanced LRC with word-level timestamps.
+
+    Parses LRC format that includes word-level timing using inline
+    <mm:ss.xx> markers before each word.
+
+    Format: [mm:ss.xx]<mm:ss.xx>word <mm:ss.xx>word ...
+
+    Args:
+        content: Enhanced LRC content.
+
+    Returns:
+        List of TimedLine with word-level TimedWord objects.
+
+    Examples:
+        >>> lines = parse_enhanced_lrc("[00:12.34]<00:12.34>Hello <00:12.80>world")
+        >>> lines[0].text
+        'Hello world'
+        >>> lines[0].words[0].text
+        'Hello'
+        >>> lines[0].words[0].start
+        12.34
+    """
+    result: list[TimedLine] = []
+
+    for line in content.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+
+        # Skip metadata tags
+        if LRC_METADATA_PATTERN.match(line):
+            continue
+
+        # Extract line timestamp
+        line_match = LRC_TIMESTAMP_PATTERN.match(line)
+        if not line_match:
+            continue
+
+        line_start = _parse_timestamp_components(
+            line_match.group(1), line_match.group(2), line_match.group(3)
+        )
+        remaining = line[line_match.end():]
+
+        # Parse word timestamps and words
+        words: list[TimedWord] = []
+        word_timestamps: list[tuple[float, str]] = []
+
+        # Split by word timestamp markers
+        parts = ENHANCED_WORD_PATTERN.split(remaining)
+
+        # parts alternates: [text_before, min, sec, frac, text_after, min, sec, frac, ...]
+        # First element is text before first timestamp (usually empty)
+        # Then groups of 4: (min, sec, frac, text_after_timestamp)
+
+        i = 0
+        while i < len(parts):
+            if i == 0:
+                # Text before first timestamp (skip if empty)
+                if parts[i].strip():
+                    # Text without timestamp at start - use line start time
+                    word_timestamps.append((line_start, parts[i].strip()))
+                i += 1
+            elif i + 3 < len(parts):
+                # We have a full timestamp group
+                ts = _parse_timestamp_components(parts[i], parts[i + 1], parts[i + 2])
+                text_part = parts[i + 3].strip() if i + 3 < len(parts) else ""
+                if text_part:
+                    # The text after timestamp may contain multiple words if there's
+                    # no timestamp for intermediate words. We take all text until
+                    # the next timestamp as belonging to this word/phrase.
+                    word_timestamps.append((ts, text_part))
+                i += 4
+            else:
+                break
+
+        # Create TimedWord objects
+        for idx, (ts, word_text) in enumerate(word_timestamps):
+            # For end time, use next word's start or estimate for last word
+            end_ts = (
+                word_timestamps[idx + 1][0]
+                if idx + 1 < len(word_timestamps)
+                else ts + 0.5
+            )
+
+            words.append(
+                TimedWord(
+                    text=word_text,
+                    start=ts,
+                    end=end_ts,
+                )
+            )
+
+        # Skip if no words parsed
+        if not words:
+            continue
+
+        # Reconstruct full text
+        full_text = " ".join(w.text for w in words)
+
+        result.append(
+            TimedLine(
+                text=full_text,
+                start=words[0].start,
+                end=words[-1].end,
+                words=tuple(words),
+            )
+        )
+
+    # Sort by start time
+    result.sort(key=lambda line: line.start)
+    return result
+
+
+def parse_lyrics_file_auto(
+    path: Path,
+) -> tuple[list[TimedLine] | None, dict[str, list[str]] | None]:
+    """Parse lyrics file with auto-format detection.
+
+    Automatically detects the lyrics format and parses accordingly.
+    Returns timed lines for timestamped formats, or section lyrics
+    for plain text format.
+
+    Args:
+        path: Path to lyrics file.
+
+    Returns:
+        Tuple of:
+        - List of TimedLine if timestamps detected, None otherwise.
+        - Section lyrics dict if plain text with sections, None otherwise.
+
+        At least one will be non-None. If timestamps are detected,
+        section headers are ignored and timed lines are returned.
+
+    Raises:
+        FileNotFoundError: If the lyrics file does not exist.
+
+    Examples:
+        >>> timed, sections = parse_lyrics_file_auto(Path("song.lrc"))
+        >>> if timed is not None:
+        ...     print("Got timestamped lyrics")
+        >>> if sections is not None:
+        ...     print("Got section-based lyrics")
+    """
+    content = path.read_text(encoding="utf-8")
+
+    if not content.strip():
+        # Empty file - return empty section dict
+        return None, {}
+
+    fmt = detect_lyrics_format(content)
+
+    if fmt == LyricsFormat.LRC_ENHANCED:
+        timed_lines = parse_enhanced_lrc(content)
+        return timed_lines, None
+
+    elif fmt == LyricsFormat.LRC:
+        timed_lines = parse_lrc_lyrics(content)
+        return timed_lines, None
+
+    elif fmt == LyricsFormat.SIMPLE_TIMED:
+        timed_lines = parse_simple_timed_lyrics(content)
+        return timed_lines, None
+
+    else:  # LyricsFormat.PLAIN
+        section_lyrics = parse_lyrics_file(path)
+        return None, section_lyrics
 
 
 def parse_lyrics_file(path: Path) -> dict[str, list[str]]:

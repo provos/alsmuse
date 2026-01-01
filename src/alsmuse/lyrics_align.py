@@ -1,11 +1,28 @@
-"""Lyrics alignment using forced alignment with stable-ts.
+"""Lyrics alignment and transcription using stable-ts.
 
-This module provides functionality to align lyrics text to audio using
-the stable-ts (stable_whisper) library. It includes hallucination filtering
-to remove words that fall outside known valid audio ranges.
+This module provides functionality to align or transcribe lyrics using
+the stable-ts (stable_whisper) library built on OpenAI's Whisper model.
+
+Features:
+    - **Forced alignment**: Align provided lyrics text to audio, producing
+      word-level timestamps that match when each word is sung.
+    - **ASR transcription**: Automatically transcribe lyrics from vocal audio
+      when no lyrics file is provided.
+    - **Hallucination filtering**: Remove words/segments that fall outside
+      known valid audio ranges (e.g., during silent gaps in the vocal track).
+    - **Segment-based line breaking**: Use Whisper's natural phrase boundaries
+      for transcription, splitting only long segments for readability.
 
 The stable-ts dependency is optional - import errors are handled gracefully
-with helpful error messages.
+with helpful error messages. Install with: pip install 'alsmuse[align]'
+
+Key Functions:
+    - align_lyrics: Force-align lyrics text to audio with word-level timing.
+    - transcribe_lyrics: Transcribe lyrics from audio using Whisper ASR.
+    - segments_to_lines: Convert transcribed segments to displayable lines.
+    - filter_to_valid_ranges: Remove hallucinated words outside vocal regions.
+    - filter_segments_to_valid_ranges: Remove hallucinated segments.
+    - words_to_lines: Reconstruct original line structure from word timestamps.
 """
 
 from __future__ import annotations
@@ -15,7 +32,7 @@ import unicodedata
 from pathlib import Path
 
 from .exceptions import AlignmentError
-from .models import TimedLine, TimedWord
+from .models import TimedLine, TimedSegment, TimedWord
 
 
 def get_compute_device() -> str:
@@ -240,8 +257,8 @@ def align_lyrics(
         AlignmentError: If stable-ts is not installed or alignment fails.
     """
     try:
-        import stable_whisper  # type: ignore[import-not-found]
-        import torch  # type: ignore[import-not-found]
+        import stable_whisper  # type: ignore[import-not-found,import-untyped]
+        import torch  # noqa: F401  # type: ignore[import-not-found,import-untyped]
     except ImportError as e:
         raise AlignmentError(
             "stable-ts is not installed. "
@@ -249,6 +266,7 @@ def align_lyrics(
         ) from e
 
     # Select optimal compute device (GPU/MPS/CPU)
+    # Note: torch import above ensures PyTorch is available for get_compute_device()
     device = get_compute_device()
 
     # MPS doesn't support float64 which stable-ts requires internally.
@@ -285,3 +303,236 @@ def align_lyrics(
     filtered_words = filter_to_valid_ranges(all_words, valid_ranges)
 
     return filtered_words
+
+
+def filter_segments_to_valid_ranges(
+    segments: list[TimedSegment],
+    valid_ranges: list[tuple[float, float]],
+) -> list[TimedSegment]:
+    """Remove segments that fall outside known audio regions.
+
+    A segment is kept if its midpoint falls within any valid range.
+    This filters out Whisper hallucinations during silent gaps.
+
+    Args:
+        segments: All segments from transcription.
+        valid_ranges: Time ranges where real audio exists, as
+            (start_seconds, end_seconds) tuples.
+
+    Returns:
+        Filtered list with hallucinated segments removed.
+    """
+    if not valid_ranges:
+        return segments
+
+    def is_in_valid_range(segment: TimedSegment) -> bool:
+        midpoint = (segment.start + segment.end) / 2
+        return any(start <= midpoint <= end for start, end in valid_ranges)
+
+    return [s for s in segments if is_in_valid_range(s)]
+
+
+def transcribe_lyrics(
+    audio_path: Path,
+    valid_ranges: list[tuple[float, float]],
+    language: str = "en",
+    model_size: str = "base",
+) -> tuple[list[TimedSegment], str]:
+    """Transcribe lyrics from audio using Whisper ASR.
+
+    Uses stable-ts for transcription, preserving segment boundaries.
+    Filters results to only include content within known valid audio
+    ranges (hallucination filtering).
+
+    Args:
+        audio_path: Path to combined vocal audio.
+        valid_ranges: List of (start, end) tuples where real audio exists.
+        language: Language code for transcription model.
+        model_size: Whisper model size.
+
+    Returns:
+        Tuple of:
+        - List of TimedSegment preserving Whisper's phrase boundaries.
+        - Raw transcription text (for saving to file).
+
+    Raises:
+        AlignmentError: If stable-ts is not installed or transcription fails.
+    """
+    try:
+        import stable_whisper  # type: ignore[import-not-found,import-untyped]
+        import torch  # noqa: F401  # type: ignore[import-not-found,import-untyped]
+    except ImportError as e:
+        raise AlignmentError(
+            "stable-ts is not installed. "
+            "Install alignment dependencies with: pip install 'alsmuse[align]'"
+        ) from e
+
+    # Select optimal compute device (GPU/MPS/CPU)
+    # Note: torch import above ensures PyTorch is available for get_compute_device()
+    device = get_compute_device()
+
+    # MPS doesn't support float64 which stable-ts requires internally.
+    # Fall back to CPU for reliable operation on macOS.
+    # CPU is still fast for transcription (uses all cores).
+    if device == "mps":
+        device = "cpu"
+
+    try:
+        model = stable_whisper.load_model(model_size, device=device)
+    except Exception as e:
+        raise AlignmentError(f"Failed to load Whisper model '{model_size}': {e}") from e
+
+    try:
+        result = model.transcribe(str(audio_path), language=language)
+    except Exception as e:
+        raise AlignmentError(f"Transcription failed: {e}") from e
+
+    # Build segments from Whisper result
+    all_segments: list[TimedSegment] = []
+    for segment in result.segments:
+        # Extract words from segment
+        words: list[TimedWord] = []
+        for word in segment.words:
+            word_text = word.word.strip()
+            if word_text:  # Skip empty words
+                words.append(
+                    TimedWord(
+                        text=word_text,
+                        start=word.start,
+                        end=word.end,
+                    )
+                )
+
+        if words:  # Only create segment if it has words
+            segment_text = segment.text.strip()
+            all_segments.append(
+                TimedSegment(
+                    text=segment_text,
+                    start=segment.start,
+                    end=segment.end,
+                    words=tuple(words),
+                )
+            )
+
+    # Filter segments to valid ranges
+    filtered_segments = filter_segments_to_valid_ranges(all_segments, valid_ranges)
+
+    # Build raw text for saving
+    raw_text = "\n".join(s.text for s in filtered_segments)
+
+    return filtered_segments, raw_text
+
+
+def _split_segment_at_punctuation(
+    segment: TimedSegment,
+    max_words_per_line: int,
+) -> list[TimedLine]:
+    """Split a segment that exceeds max_words_per_line.
+
+    Prefers splitting at punctuation boundaries, otherwise splits
+    at approximately the midpoint.
+
+    Args:
+        segment: Segment to split.
+        max_words_per_line: Maximum words per resulting line.
+
+    Returns:
+        List of TimedLine objects.
+    """
+    words = list(segment.words)
+    lines: list[TimedLine] = []
+
+    while len(words) > max_words_per_line:
+        # Find punctuation boundaries in the first max_words_per_line words
+        best_split_idx = -1
+        for i in range(min(max_words_per_line, len(words)) - 1, 0, -1):
+            word_text = words[i].text
+            # Check if word ends with punctuation that suggests a phrase break
+            if word_text and word_text[-1] in ".,;:!?":
+                best_split_idx = i + 1
+                break
+
+        # If no punctuation found, split at midpoint
+        if best_split_idx == -1:
+            best_split_idx = min(max_words_per_line, len(words) // 2)
+            if best_split_idx == 0:
+                best_split_idx = 1  # At least take one word
+
+        # Create line from first portion
+        line_words = tuple(words[:best_split_idx])
+        line_text = " ".join(w.text for w in line_words)
+        lines.append(
+            TimedLine(
+                text=line_text,
+                start=line_words[0].start,
+                end=line_words[-1].end,
+                words=line_words,
+            )
+        )
+
+        # Continue with remaining words
+        words = words[best_split_idx:]
+
+    # Handle remaining words
+    if words:
+        line_words = tuple(words)
+        line_text = " ".join(w.text for w in line_words)
+        lines.append(
+            TimedLine(
+                text=line_text,
+                start=line_words[0].start,
+                end=line_words[-1].end,
+                words=line_words,
+            )
+        )
+
+    return lines
+
+
+def segments_to_lines(
+    segments: list[TimedSegment],
+    max_words_per_line: int = 15,
+) -> list[TimedLine]:
+    """Convert transcribed segments to lines, splitting long segments.
+
+    Uses Whisper's segment boundaries as the primary line breaks.
+    Only applies heuristic splitting to segments that exceed max_words_per_line.
+
+    Algorithm:
+    1. For each segment:
+       a. If word count <= max_words_per_line: create single line from segment
+       b. If word count > max_words_per_line: split on punctuation or mid-point
+    2. Preserve word-level timing from original segment
+
+    Args:
+        segments: Transcribed segments from Whisper.
+        max_words_per_line: Only split segments exceeding this word count.
+
+    Returns:
+        List of TimedLine, typically one per segment unless segment was split.
+    """
+    lines: list[TimedLine] = []
+
+    for segment in segments:
+        word_count = len(segment.words)
+
+        if word_count == 0:
+            # Empty segment, skip
+            continue
+
+        if word_count <= max_words_per_line:
+            # Segment fits in one line, create directly
+            lines.append(
+                TimedLine(
+                    text=segment.text,
+                    start=segment.start,
+                    end=segment.end,
+                    words=segment.words,
+                )
+            )
+        else:
+            # Segment too long, split it
+            split_lines = _split_segment_at_punctuation(segment, max_words_per_line)
+            lines.extend(split_lines)
+
+    return lines

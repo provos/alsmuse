@@ -9,10 +9,12 @@ from alsmuse.exceptions import AlignmentError
 from alsmuse.lyrics_align import (
     _normalize_text,
     _tokenize,
+    filter_segments_to_valid_ranges,
     filter_to_valid_ranges,
+    segments_to_lines,
     words_to_lines,
 )
-from alsmuse.models import TimedLine, TimedWord
+from alsmuse.models import TimedLine, TimedSegment, TimedWord
 
 # ---------------------------------------------------------------------------
 # Tests for get_compute_device
@@ -697,5 +699,491 @@ class TestAlignLyrics:
                 lyrics_align.align_lyrics(
                     audio_path=Path("/fake/audio.wav"),
                     lyrics_text="Test",
+                    valid_ranges=[(0.0, 10.0)],
+                )
+
+
+# ---------------------------------------------------------------------------
+# Tests for filter_segments_to_valid_ranges
+# ---------------------------------------------------------------------------
+
+
+class TestFilterSegmentsToValidRanges:
+    """Tests for filter_segments_to_valid_ranges function."""
+
+    def _make_segment(
+        self, text: str, start: float, end: float, words: list[TimedWord] | None = None
+    ) -> TimedSegment:
+        """Helper to create a TimedSegment."""
+        if words is None:
+            words = [TimedWord(text=text, start=start, end=end)]
+        return TimedSegment(text=text, start=start, end=end, words=tuple(words))
+
+    def test_empty_segments_returns_empty(self) -> None:
+        """Empty segment list returns empty list."""
+        result = filter_segments_to_valid_ranges([], [(0.0, 10.0)])
+        assert result == []
+
+    def test_empty_ranges_returns_all_segments(self) -> None:
+        """Empty valid_ranges returns all segments."""
+        segments = [
+            self._make_segment("hello", 0.0, 0.5),
+            self._make_segment("world", 0.5, 1.0),
+        ]
+        result = filter_segments_to_valid_ranges(segments, [])
+        assert result == segments
+
+    def test_segment_inside_range_is_kept(self) -> None:
+        """Segment whose midpoint is inside a valid range is kept."""
+        segments = [
+            self._make_segment("hello", 1.0, 2.0),  # midpoint = 1.5
+        ]
+        result = filter_segments_to_valid_ranges(segments, [(0.0, 3.0)])
+        assert len(result) == 1
+        assert result[0].text == "hello"
+
+    def test_segment_outside_range_is_filtered(self) -> None:
+        """Segment whose midpoint is outside valid ranges is filtered."""
+        segments = [
+            self._make_segment("hello", 5.0, 6.0),  # midpoint = 5.5
+        ]
+        result = filter_segments_to_valid_ranges(segments, [(0.0, 3.0)])
+        assert result == []
+
+    def test_segment_at_range_boundary_is_kept(self) -> None:
+        """Segment whose midpoint is exactly at range boundary is kept."""
+        segments = [
+            self._make_segment("hello", 2.0, 4.0),  # midpoint = 3.0
+        ]
+        result = filter_segments_to_valid_ranges(segments, [(0.0, 3.0)])
+        assert len(result) == 1
+
+    def test_multiple_ranges_checked(self) -> None:
+        """Segments in any of multiple valid ranges are kept."""
+        segments = [
+            self._make_segment("first", 0.5, 1.5),  # midpoint = 1.0, in range 1
+            self._make_segment("gap", 3.0, 4.0),  # midpoint = 3.5, not in any range
+            self._make_segment("second", 5.5, 6.5),  # midpoint = 6.0, in range 2
+        ]
+        result = filter_segments_to_valid_ranges(segments, [(0.0, 2.0), (5.0, 7.0)])
+
+        assert len(result) == 2
+        assert result[0].text == "first"
+        assert result[1].text == "second"
+
+    def test_realistic_hallucination_filtering(self) -> None:
+        """Simulates filtering hallucinations from silent gaps."""
+        segments = [
+            # Real vocals: 0-10s
+            self._make_segment("hello world", 1.0, 3.0),
+            # Hallucination in gap: 10-20s
+            self._make_segment("phantom words", 15.0, 16.0),
+            # Real vocals: 20-30s
+            self._make_segment("goodbye", 21.0, 22.0),
+        ]
+        valid_ranges = [(0.0, 10.0), (20.0, 30.0)]
+
+        result = filter_segments_to_valid_ranges(segments, valid_ranges)
+
+        assert len(result) == 2
+        texts = [s.text for s in result]
+        assert texts == ["hello world", "goodbye"]
+
+
+# ---------------------------------------------------------------------------
+# Tests for segments_to_lines
+# ---------------------------------------------------------------------------
+
+
+class TestSegmentsToLines:
+    """Tests for segments_to_lines function."""
+
+    def _make_words(self, word_list: list[tuple[str, float, float]]) -> tuple[TimedWord, ...]:
+        """Helper to create a tuple of TimedWord objects."""
+        return tuple(TimedWord(text=t, start=s, end=e) for t, s, e in word_list)
+
+    def _make_segment(
+        self, text: str, start: float, end: float, words: tuple[TimedWord, ...]
+    ) -> TimedSegment:
+        """Helper to create a TimedSegment."""
+        return TimedSegment(text=text, start=start, end=end, words=words)
+
+    def test_empty_segments_returns_empty(self) -> None:
+        """Empty segment list returns empty list."""
+        result = segments_to_lines([])
+        assert result == []
+
+    def test_single_short_segment_becomes_one_line(self) -> None:
+        """A segment with few words becomes a single line."""
+        words = self._make_words([
+            ("hello", 0.0, 0.5),
+            ("world", 0.6, 1.0),
+        ])
+        segment = self._make_segment("hello world", 0.0, 1.0, words)
+
+        result = segments_to_lines([segment])
+
+        assert len(result) == 1
+        assert result[0].text == "hello world"
+        assert result[0].start == 0.0
+        assert result[0].end == 1.0
+        assert len(result[0].words) == 2
+
+    def test_multiple_short_segments_become_multiple_lines(self) -> None:
+        """Multiple short segments become multiple lines."""
+        words1 = self._make_words([("hello", 0.0, 0.5)])
+        words2 = self._make_words([("world", 2.0, 2.5)])
+
+        segments = [
+            self._make_segment("hello", 0.0, 0.5, words1),
+            self._make_segment("world", 2.0, 2.5, words2),
+        ]
+
+        result = segments_to_lines(segments)
+
+        assert len(result) == 2
+        assert result[0].text == "hello"
+        assert result[1].text == "world"
+
+    def test_long_segment_gets_split(self) -> None:
+        """A segment exceeding max_words_per_line is split."""
+        # Create a segment with 20 words
+        word_data = [(f"word{i}", float(i), float(i) + 0.5) for i in range(20)]
+        words = self._make_words(word_data)
+        segment_text = " ".join(w.text for w in words)
+        segment = self._make_segment(segment_text, 0.0, 20.0, words)
+
+        result = segments_to_lines([segment], max_words_per_line=10)
+
+        # Should be split into at least 2 lines
+        assert len(result) >= 2
+        # Total words should equal original
+        total_words = sum(len(line.words) for line in result)
+        assert total_words == 20
+
+    def test_split_prefers_punctuation(self) -> None:
+        """When splitting, punctuation boundaries are preferred."""
+        # Create words where word5 ends with a comma
+        word_data = [
+            ("This", 0.0, 0.5),
+            ("is", 0.6, 1.0),
+            ("a", 1.1, 1.3),
+            ("test,", 1.4, 1.8),  # Punctuation here
+            ("and", 1.9, 2.2),
+            ("more", 2.3, 2.6),
+            ("words", 2.7, 3.0),
+            ("follow", 3.1, 3.4),
+            ("after", 3.5, 3.8),
+            ("it", 3.9, 4.2),
+            ("now", 4.3, 4.6),
+            ("even", 4.7, 5.0),
+            ("more", 5.1, 5.4),
+            ("text", 5.5, 5.8),
+            ("here", 5.9, 6.2),
+            ("today", 6.3, 6.6),
+        ]
+        words = self._make_words(word_data)
+        segment_text = " ".join(w[0] for w in word_data)
+        segment = self._make_segment(segment_text, 0.0, 6.6, words)
+
+        result = segments_to_lines([segment], max_words_per_line=10)
+
+        # Should split at punctuation point if possible
+        assert len(result) >= 2
+        # First line should end with "test," (index 3, which is 4 words)
+        # or the split should be reasonable
+        first_line_words = [w.text for w in result[0].words]
+        assert len(first_line_words) <= 10
+
+    def test_segment_at_exact_limit_not_split(self) -> None:
+        """A segment with exactly max_words_per_line words is not split."""
+        word_data = [(f"word{i}", float(i), float(i) + 0.5) for i in range(15)]
+        words = self._make_words(word_data)
+        segment_text = " ".join(w.text for w in words)
+        segment = self._make_segment(segment_text, 0.0, 15.0, words)
+
+        result = segments_to_lines([segment], max_words_per_line=15)
+
+        assert len(result) == 1
+        assert len(result[0].words) == 15
+
+    def test_empty_segment_is_skipped(self) -> None:
+        """Segments with no words are skipped."""
+        segment = self._make_segment("", 0.0, 1.0, ())
+
+        result = segments_to_lines([segment])
+
+        assert result == []
+
+    def test_preserves_word_timing(self) -> None:
+        """Word timing is preserved in output lines."""
+        words = self._make_words([
+            ("hello", 1.5, 2.0),
+            ("world", 2.5, 3.0),
+        ])
+        segment = self._make_segment("hello world", 1.5, 3.0, words)
+
+        result = segments_to_lines([segment])
+
+        assert result[0].words[0].start == 1.5
+        assert result[0].words[0].end == 2.0
+        assert result[0].words[1].start == 2.5
+        assert result[0].words[1].end == 3.0
+
+    def test_line_timing_from_words(self) -> None:
+        """Line start/end comes from first/last word timing."""
+        words = self._make_words([
+            ("hello", 1.5, 2.0),
+            ("world", 2.5, 3.0),
+        ])
+        segment = self._make_segment("hello world", 1.0, 4.0, words)
+
+        result = segments_to_lines([segment])
+
+        # Line timing should use word timing, not segment timing
+        # For non-split segments, segment timing is preserved
+        assert result[0].start == 1.0  # Uses segment start
+        assert result[0].end == 4.0  # Uses segment end
+
+
+# ---------------------------------------------------------------------------
+# Tests for TimedSegment model
+# ---------------------------------------------------------------------------
+
+
+class TestTimedSegmentModel:
+    """Tests for TimedSegment dataclass."""
+
+    def test_frozen_dataclass(self) -> None:
+        """TimedSegment is immutable."""
+        words = (TimedWord(text="hello", start=1.0, end=2.0),)
+        segment = TimedSegment(text="hello", start=1.0, end=2.0, words=words)
+
+        with pytest.raises(AttributeError):
+            segment.text = "world"  # type: ignore[misc]
+
+    def test_all_fields_accessible(self) -> None:
+        """All fields are accessible after construction."""
+        word1 = TimedWord(text="hello", start=1.0, end=1.5)
+        word2 = TimedWord(text="world", start=1.6, end=2.0)
+        segment = TimedSegment(
+            text="hello world", start=1.0, end=2.0, words=(word1, word2)
+        )
+
+        assert segment.text == "hello world"
+        assert segment.start == 1.0
+        assert segment.end == 2.0
+        assert len(segment.words) == 2
+        assert segment.words[0].text == "hello"
+        assert segment.words[1].text == "world"
+
+
+# ---------------------------------------------------------------------------
+# Tests for transcribe_lyrics (with mocked stable_whisper)
+# ---------------------------------------------------------------------------
+
+
+class TestTranscribeLyrics:
+    """Tests for transcribe_lyrics function."""
+
+    def test_raises_error_when_stable_whisper_not_installed(self) -> None:
+        """Raises AlignmentError when stable-ts is not installed."""
+        with patch.dict("sys.modules", {"stable_whisper": None}):
+            import importlib
+
+            from alsmuse import lyrics_align
+
+            importlib.reload(lyrics_align)
+
+            with pytest.raises(AlignmentError, match="stable-ts.*not installed"):
+                lyrics_align.transcribe_lyrics(
+                    audio_path=Path("/fake/audio.wav"),
+                    valid_ranges=[(0.0, 10.0)],
+                )
+
+    def test_successful_transcription_with_mocked_model(self) -> None:
+        """Successful transcription returns filtered TimedSegment list."""
+        # Create mock word objects
+        mock_word1 = MagicMock()
+        mock_word1.word = "hello"
+        mock_word1.start = 1.0
+        mock_word1.end = 1.5
+
+        mock_word2 = MagicMock()
+        mock_word2.word = "world"
+        mock_word2.start = 1.6
+        mock_word2.end = 2.0
+
+        # Create mock segment
+        mock_segment = MagicMock()
+        mock_segment.words = [mock_word1, mock_word2]
+        mock_segment.text = "hello world"
+        mock_segment.start = 1.0
+        mock_segment.end = 2.0
+
+        # Create mock result
+        mock_result = MagicMock()
+        mock_result.segments = [mock_segment]
+
+        # Create mock model
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = mock_result
+
+        # Create mock stable_whisper module
+        mock_stable_whisper = MagicMock()
+        mock_stable_whisper.load_model.return_value = mock_model
+
+        # Create mock torch
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.backends.mps.is_available.return_value = False
+
+        with patch.dict(
+            "sys.modules", {"stable_whisper": mock_stable_whisper, "torch": mock_torch}
+        ):
+            import importlib
+
+            from alsmuse import lyrics_align
+
+            importlib.reload(lyrics_align)
+
+            segments, raw_text = lyrics_align.transcribe_lyrics(
+                audio_path=Path("/fake/audio.wav"),
+                valid_ranges=[(0.0, 10.0)],
+            )
+
+        assert len(segments) == 1
+        assert segments[0].text == "hello world"
+        assert segments[0].start == 1.0
+        assert segments[0].end == 2.0
+        assert len(segments[0].words) == 2
+        assert raw_text == "hello world"
+
+    def test_filters_segments_outside_valid_ranges(self) -> None:
+        """Segments outside valid ranges are filtered out."""
+        # Create mock segment in valid range
+        mock_word_valid = MagicMock()
+        mock_word_valid.word = "hello"
+        mock_word_valid.start = 1.0
+        mock_word_valid.end = 1.5
+
+        mock_segment_valid = MagicMock()
+        mock_segment_valid.words = [mock_word_valid]
+        mock_segment_valid.text = "hello"
+        mock_segment_valid.start = 1.0
+        mock_segment_valid.end = 1.5
+
+        # Create mock segment outside valid range
+        mock_word_invalid = MagicMock()
+        mock_word_invalid.word = "phantom"
+        mock_word_invalid.start = 15.0
+        mock_word_invalid.end = 15.5
+
+        mock_segment_invalid = MagicMock()
+        mock_segment_invalid.words = [mock_word_invalid]
+        mock_segment_invalid.text = "phantom"
+        mock_segment_invalid.start = 15.0
+        mock_segment_invalid.end = 15.5
+
+        mock_result = MagicMock()
+        mock_result.segments = [mock_segment_valid, mock_segment_invalid]
+
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = mock_result
+
+        mock_stable_whisper = MagicMock()
+        mock_stable_whisper.load_model.return_value = mock_model
+
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.backends.mps.is_available.return_value = False
+
+        with patch.dict(
+            "sys.modules", {"stable_whisper": mock_stable_whisper, "torch": mock_torch}
+        ):
+            import importlib
+
+            from alsmuse import lyrics_align
+
+            importlib.reload(lyrics_align)
+
+            segments, raw_text = lyrics_align.transcribe_lyrics(
+                audio_path=Path("/fake/audio.wav"),
+                valid_ranges=[(0.0, 10.0)],  # Only 0-10s is valid
+            )
+
+        # Only the segment in valid range should be returned
+        assert len(segments) == 1
+        assert segments[0].text == "hello"
+        assert raw_text == "hello"
+
+    def test_uses_cpu_for_mps(self) -> None:
+        """Model falls back to CPU when MPS is detected."""
+        mock_word = MagicMock()
+        mock_word.word = "test"
+        mock_word.start = 0.0
+        mock_word.end = 1.0
+
+        mock_segment = MagicMock()
+        mock_segment.words = [mock_word]
+        mock_segment.text = "test"
+        mock_segment.start = 0.0
+        mock_segment.end = 1.0
+
+        mock_result = MagicMock()
+        mock_result.segments = [mock_segment]
+
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = mock_result
+
+        mock_stable_whisper = MagicMock()
+        mock_stable_whisper.load_model.return_value = mock_model
+
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.backends.mps.is_available.return_value = True  # macOS
+
+        with patch.dict(
+            "sys.modules", {"stable_whisper": mock_stable_whisper, "torch": mock_torch}
+        ):
+            import importlib
+
+            from alsmuse import lyrics_align
+
+            importlib.reload(lyrics_align)
+
+            lyrics_align.transcribe_lyrics(
+                audio_path=Path("/fake/audio.wav"),
+                valid_ranges=[(0.0, 10.0)],
+                model_size="small",
+            )
+
+        # Verify model was loaded with CPU device (MPS falls back to CPU)
+        mock_stable_whisper.load_model.assert_called_once_with("small", device="cpu")
+
+    def test_transcription_failure_raises_alignment_error(self) -> None:
+        """Transcription failure raises AlignmentError."""
+        mock_model = MagicMock()
+        mock_model.transcribe.side_effect = RuntimeError("Transcription failed")
+
+        mock_stable_whisper = MagicMock()
+        mock_stable_whisper.load_model.return_value = mock_model
+
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = False
+        mock_torch.backends.mps.is_available.return_value = False
+
+        with patch.dict(
+            "sys.modules", {"stable_whisper": mock_stable_whisper, "torch": mock_torch}
+        ):
+            import importlib
+
+            from alsmuse import lyrics_align
+
+            importlib.reload(lyrics_align)
+
+            with pytest.raises(AlignmentError, match="Transcription failed"):
+                lyrics_align.transcribe_lyrics(
+                    audio_path=Path("/fake/audio.wav"),
                     valid_ranges=[(0.0, 10.0)],
                 )

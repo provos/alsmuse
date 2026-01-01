@@ -19,7 +19,12 @@ from .events import (
 from .exceptions import AlignmentError
 from .extractors import StructureTrackExtractor, fill_gaps
 from .formatter import format_av_table, format_phrase_table
-from .lyrics import distribute_lyrics, distribute_timed_lyrics, parse_lyrics_file
+from .lyrics import (
+    distribute_lyrics,
+    distribute_timed_lyrics,
+    parse_lyrics_file,
+    parse_lyrics_file_auto,
+)
 from .midi import extract_midi_clip_contents
 from .models import MidiClipContent, Phrase, TrackEvent
 from .parser import (
@@ -74,6 +79,11 @@ def analyze_als_v2(
     align_vocals: bool = False,
     vocal_tracks: tuple[str, ...] | None = None,
     use_all_vocals: bool = False,
+    save_vocals_path: Path | None = None,
+    transcribe: bool = False,
+    save_lyrics_path: Path | None = None,
+    language: str = "en",
+    model_size: str = "base",
 ) -> str:
     """Analysis pipeline with phrase subdivision and event detection.
 
@@ -86,18 +96,24 @@ def analyze_als_v2(
     3. Fill gaps with transitions
     4. Subdivide sections into phrases
     5. Optionally detect MIDI events and merge into phrases
-    6. Optionally parse and distribute lyrics (with optional forced alignment)
-    7. Format output as markdown phrase table
+    6. Optionally transcribe lyrics from vocal audio (if transcribe=True)
+    7. Optionally parse and distribute lyrics (with optional forced alignment)
+    8. Format output as markdown phrase table
 
     Args:
         als_path: Path to the .als file
         structure_track: Name of the structure track (case-insensitive)
         beats_per_phrase: Number of beats per phrase (default 8 = 2 bars in 4/4)
         show_events: Whether to detect and show track events (default True)
-        lyrics_path: Optional path to lyrics file with [SECTION] headers
+        lyrics_path: Optional path to lyrics file
         align_vocals: If True, use forced alignment for precise lyrics timing
         vocal_tracks: Specific vocal track names to use for alignment
         use_all_vocals: If True, use all detected vocal tracks without prompting
+        save_vocals_path: If provided, save combined vocals to this path for validation
+        transcribe: If True, transcribe lyrics from vocal audio using ASR
+        save_lyrics_path: If provided, save transcribed lyrics to this path
+        language: Language code for transcription/alignment (default: "en")
+        model_size: Whisper model size (default: "base")
 
     Returns:
         Markdown formatted phrase table string
@@ -119,10 +135,37 @@ def analyze_als_v2(
         events = detect_track_events_from_als_phrase_aligned(als_path, phrases)
         phrases = merge_events_into_phrases(phrases, events)
 
-    # Parse and distribute lyrics if provided
+    # Handle transcription mode (ASR from vocal audio)
     show_lyrics = False
-    if lyrics_path is not None:
-        if align_vocals:
+    if transcribe:
+        try:
+            phrases = transcribe_and_distribute_lyrics(
+                als_path=als_path,
+                phrases=phrases,
+                bpm=bpm,
+                vocal_tracks=vocal_tracks,
+                use_all_vocals=use_all_vocals,
+                save_vocals_path=save_vocals_path,
+                save_lyrics_path=save_lyrics_path,
+                language=language,
+                model_size=model_size,
+            )
+            show_lyrics = True
+        except AlignmentError as e:
+            # Log error and continue without lyrics
+            click.echo(f"Transcription failed: {e}", err=True)
+
+    # Parse and distribute lyrics if provided (and not in transcribe mode)
+    elif lyrics_path is not None:
+        # Try to parse as timed lyrics first (auto-detection)
+        timed_lines, section_lyrics = parse_lyrics_file_auto(lyrics_path)
+
+        if timed_lines is not None:
+            # Lyrics have timestamps - use directly, no alignment needed
+            phrases = distribute_timed_lyrics(phrases, timed_lines, bpm)
+            show_lyrics = True
+        elif align_vocals:
+            # Plain lyrics with alignment requested
             try:
                 phrases = align_and_distribute_lyrics(
                     als_path=als_path,
@@ -131,6 +174,7 @@ def analyze_als_v2(
                     bpm=bpm,
                     vocal_tracks=vocal_tracks,
                     use_all_vocals=use_all_vocals,
+                    save_vocals_path=save_vocals_path,
                 )
                 show_lyrics = True
             except AlignmentError as e:
@@ -139,12 +183,14 @@ def analyze_als_v2(
                     f"Alignment failed: {e}. Falling back to heuristic distribution.",
                     err=True,
                 )
-                section_lyrics = parse_lyrics_file(lyrics_path)
+                if section_lyrics is None:
+                    section_lyrics = parse_lyrics_file(lyrics_path)
                 phrases = distribute_lyrics(phrases, section_lyrics)
                 show_lyrics = True
         else:
-            # Existing heuristic distribution
-            section_lyrics = parse_lyrics_file(lyrics_path)
+            # Plain lyrics, heuristic distribution
+            if section_lyrics is None:
+                section_lyrics = parse_lyrics_file(lyrics_path)
             phrases = distribute_lyrics(phrases, section_lyrics)
             show_lyrics = True
 
@@ -241,6 +287,7 @@ def align_and_distribute_lyrics(
     bpm: float,
     vocal_tracks: tuple[str, ...] | None = None,
     use_all_vocals: bool = False,
+    save_vocals_path: Path | None = None,
 ) -> list[Phrase]:
     """Full alignment pipeline: extract audio, align lyrics, distribute to phrases.
 
@@ -250,18 +297,18 @@ def align_and_distribute_lyrics(
     Steps:
     1. Extract audio clips from ALS file
     2. Select vocal tracks (using explicit selection, auto-detection, or prompting)
-    3. Combine vocal clips to a temporary audio file
+    3. Combine vocal clips to a single audio file
     4. Run forced alignment with stable-ts
     5. Distribute timed lyrics to phrases
-    6. Clean up temporary file
 
     Args:
         als_path: Path to the .als file
-        lyrics_path: Path to the lyrics file with [SECTION] headers
+        lyrics_path: Path to the lyrics file
         phrases: List of phrases to annotate with lyrics
         bpm: Tempo in beats per minute
         vocal_tracks: Specific vocal track names to use (None for auto-detect)
         use_all_vocals: If True, use all detected vocal tracks without prompting
+        save_vocals_path: If provided, save combined vocals to this path for validation
 
     Returns:
         Phrases with lyric fields populated from forced alignment.
@@ -299,19 +346,26 @@ def align_and_distribute_lyrics(
         )
 
     # Step 3: Combine vocals into single audio file
-    try:
-        with tempfile.NamedTemporaryFile(
-            suffix=".wav", delete=False, prefix="alsmuse_vocals_"
-        ) as tmp:
-            combined_path = Path(tmp.name)
-    except OSError as e:
-        raise AlignmentError(f"Failed to create temporary file: {e}") from e
+    is_temp_file = save_vocals_path is None
+    if save_vocals_path is not None:
+        combined_path = save_vocals_path
+    else:
+        try:
+            with tempfile.NamedTemporaryFile(
+                suffix=".wav", delete=False, prefix="alsmuse_vocals_"
+            ) as tmp:
+                combined_path = Path(tmp.name)
+        except OSError as e:
+            raise AlignmentError(f"Failed to create temporary file: {e}") from e
 
     try:
         try:
             _, valid_ranges = combine_clips_to_audio(selected_clips, combined_path)
         except Exception as e:
             raise AlignmentError(f"Failed to combine audio clips: {e}") from e
+
+        if save_vocals_path is not None:
+            logger.info("Saved combined vocals to: %s", combined_path)
 
         # Step 4: Read lyrics as plain text and run alignment
         all_lyrics_text = lyrics_path.read_text(encoding="utf-8").strip()
@@ -337,8 +391,130 @@ def align_and_distribute_lyrics(
         return distribute_timed_lyrics(phrases, timed_lines, bpm)
 
     finally:
-        # Cleanup temp file
-        if combined_path.exists():
+        # Only cleanup if it was a temp file
+        if is_temp_file and combined_path.exists():
+            try:
+                combined_path.unlink()
+            except OSError:
+                logger.warning("Failed to clean up temporary file: %s", combined_path)
+
+
+def transcribe_and_distribute_lyrics(
+    als_path: Path,
+    phrases: list[Phrase],
+    bpm: float,
+    vocal_tracks: tuple[str, ...] | None = None,
+    use_all_vocals: bool = False,
+    save_vocals_path: Path | None = None,
+    save_lyrics_path: Path | None = None,
+    language: str = "en",
+    model_size: str = "base",
+) -> list[Phrase]:
+    """Full transcription pipeline: extract audio, transcribe, distribute.
+
+    Steps:
+    1. Extract audio clips from ALS file
+    2. Select vocal tracks
+    3. Combine vocal clips to a single audio file
+    4. Run ASR transcription with stable-ts (preserving segments)
+    5. Filter segments to valid audio ranges (remove hallucinations)
+    6. Convert segments to lines (splitting only if too long)
+    7. Distribute timed lyrics to phrases
+
+    Args:
+        als_path: Path to the .als file
+        phrases: List of phrases to annotate with lyrics
+        bpm: Tempo in beats per minute
+        vocal_tracks: Specific vocal track names to use (None for auto-detect)
+        use_all_vocals: If True, use all detected vocal tracks without prompting
+        save_vocals_path: If provided, save combined vocals to this path
+        save_lyrics_path: If provided, save transcribed lyrics to this path
+        language: Language code for transcription (default: "en")
+        model_size: Whisper model size (default: "base")
+
+    Returns:
+        Phrases with lyric fields populated from transcription.
+
+    Raises:
+        AlignmentError: If transcription fails for any reason (no vocal tracks,
+            audio extraction failure, transcription model failure, etc.)
+    """
+    from .audio import (
+        combine_clips_to_audio,
+        extract_audio_clips,
+        select_vocal_tracks,
+    )
+    from .lyrics import distribute_timed_lyrics
+    from .lyrics_align import segments_to_lines, transcribe_lyrics
+
+    # Step 1: Extract all audio clips from ALS
+    try:
+        all_clips = extract_audio_clips(als_path, bpm)
+    except Exception as e:
+        raise AlignmentError(f"Failed to extract audio clips: {e}") from e
+
+    if not all_clips:
+        raise AlignmentError("No audio clips found in ALS file")
+
+    # Step 2: Select vocal tracks
+    selected_clips = select_vocal_tracks(
+        all_clips,
+        explicit_tracks=vocal_tracks,
+        use_all=use_all_vocals,
+    )
+
+    if not selected_clips:
+        raise AlignmentError(
+            "No vocal tracks found. Use --vocal-track to specify tracks explicitly."
+        )
+
+    # Step 3: Combine vocals into single audio file
+    is_temp_file = save_vocals_path is None
+    if save_vocals_path is not None:
+        combined_path = save_vocals_path
+    else:
+        try:
+            with tempfile.NamedTemporaryFile(
+                suffix=".wav", delete=False, prefix="alsmuse_vocals_"
+            ) as tmp:
+                combined_path = Path(tmp.name)
+        except OSError as e:
+            raise AlignmentError(f"Failed to create temporary file: {e}") from e
+
+    try:
+        try:
+            _, valid_ranges = combine_clips_to_audio(selected_clips, combined_path)
+        except Exception as e:
+            raise AlignmentError(f"Failed to combine audio clips: {e}") from e
+
+        if save_vocals_path is not None:
+            logger.info("Saved combined vocals to: %s", combined_path)
+
+        # Step 4 & 5: Transcribe and filter to valid ranges
+        segments, raw_text = transcribe_lyrics(
+            combined_path,
+            valid_ranges=valid_ranges,
+            language=language,
+            model_size=model_size,
+        )
+
+        # Step 6: Save transcription if requested
+        if save_lyrics_path is not None:
+            try:
+                save_lyrics_path.write_text(raw_text, encoding="utf-8")
+                logger.info("Saved transcribed lyrics to: %s", save_lyrics_path)
+            except OSError as e:
+                logger.warning("Failed to save lyrics: %s", e)
+
+        # Step 7: Convert segments to lines
+        timed_lines = segments_to_lines(segments)
+
+        # Step 8: Distribute to phrases
+        return distribute_timed_lyrics(phrases, timed_lines, bpm)
+
+    finally:
+        # Only cleanup if it was a temp file
+        if is_temp_file and combined_path.exists():
             try:
                 combined_path.unlink()
             except OSError:
