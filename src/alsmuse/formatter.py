@@ -95,8 +95,14 @@ def format_events(events: tuple[TrackEvent, ...]) -> str:
 
     parts = []
     for event in events:
-        verb = "enters" if event.event_type == "enter" else "exits"
-        parts.append(f"{event.category.title()} {verb}")
+        if event.event_type == "fill":
+            if event.fill_context:
+                parts.append(f"Drum fill {event.fill_context}")
+            else:
+                parts.append("Drum fill")
+        else:
+            verb = "enters" if event.event_type == "enter" else "exits"
+            parts.append(f"{event.category.title()} {verb}")
 
     return ", ".join(parts)
 

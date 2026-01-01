@@ -189,20 +189,23 @@ class MidiClipContent:
 class TrackEvent:
     """A significant change in track activity.
 
-    Represents an enter or exit event for a track, indicating when
-    an instrument or sound starts or stops playing in the arrangement.
+    Represents an enter, exit, or fill event for a track, indicating when
+    an instrument or sound starts or stops playing in the arrangement,
+    or when a drum fill occurs.
 
     Attributes:
         beat: The beat position where the event occurs.
         track_name: Name of the track that generated this event.
-        event_type: Either "enter" (starts playing) or "exit" (stops playing).
+        event_type: "enter" (starts playing), "exit" (stops playing), or "fill".
         category: The instrument category (e.g., "drums", "bass", "vocals").
+        fill_context: For fill events, context like "-> CHORUS" for the next section.
     """
 
     beat: float
     track_name: str
-    event_type: Literal["enter", "exit"]
+    event_type: Literal["enter", "exit", "fill"]
     category: str
+    fill_context: str | None = None
 
 
 @dataclass(frozen=True)

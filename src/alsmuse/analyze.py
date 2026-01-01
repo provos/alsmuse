@@ -22,7 +22,9 @@ from .category_review import prompt_category_review
 from .config import MuseConfig, load_config, save_config
 from .events import (
     categorize_all_tracks,
+    categorize_track,
     detect_events_from_clip_contents_phrase_aligned,
+    detect_fill_events,
     get_available_categories,
     merge_events_into_phrases,
 )
@@ -44,7 +46,7 @@ from .lyrics_align import (
     words_to_lines,
 )
 from .midi import extract_midi_clip_contents
-from .models import MidiClipContent, Phrase, TrackEvent
+from .models import MidiClipContent, Phrase, Section, TrackEvent
 from .parser import (
     extract_track_clips,
     extract_track_name,
@@ -179,7 +181,9 @@ def analyze_als_v2(
             save_config(als_path, updated_config)
 
     if show_events:
-        events = detect_track_events_from_als_phrase_aligned(als_path, phrases, category_overrides)
+        events = detect_track_events_from_als_phrase_aligned(
+            als_path, phrases, category_overrides, sections
+        )
         phrases = merge_events_into_phrases(phrases, events)
 
     # Handle transcription mode (ASR from vocal audio)
@@ -251,6 +255,7 @@ def detect_track_events_from_als_phrase_aligned(
     als_path: Path,
     phrases: list[Phrase],
     category_overrides: dict[str, str] | None = None,
+    sections: list[Section] | None = None,
 ) -> list[TrackEvent]:
     """Detect track events using phrase-aligned boundaries.
 
@@ -259,11 +264,15 @@ def detect_track_events_from_als_phrase_aligned(
     This approach prevents false events at section boundaries caused
     by the old global grid detection.
 
+    Also detects drum fills when sections are provided.
+
     Args:
         als_path: Path to the .als file
         phrases: List of Phrase objects defining the time boundaries.
         category_overrides: Optional mapping of track names to categories.
             If provided, these override auto-categorization.
+        sections: Optional list of Section objects for drum fill detection.
+            If provided, drum fills will be detected before section changes.
 
     Returns:
         List of TrackEvent objects for all tracks.
@@ -272,6 +281,7 @@ def detect_track_events_from_als_phrase_aligned(
     track_elements = get_track_elements(root)
 
     all_events: list[TrackEvent] = []
+    drum_clip_contents: list[MidiClipContent] = []
 
     for track_elem, track_type in track_elements:
         if track_type != "midi":
@@ -288,10 +298,25 @@ def detect_track_events_from_als_phrase_aligned(
         if not clip_contents:
             continue
 
+        # Determine track category
+        if category_overrides and track_name in category_overrides:
+            category = category_overrides[track_name]
+        else:
+            category = categorize_track(track_name)
+
+        # Collect drum track clip contents for fill detection
+        if category == "drums":
+            drum_clip_contents.extend(clip_contents)
+
         events = detect_events_from_clip_contents_phrase_aligned(
             track_name, clip_contents, phrases, category_overrides
         )
         all_events.extend(events)
+
+    # Detect drum fills if sections are provided
+    if sections and drum_clip_contents:
+        fill_events = detect_fill_events(drum_clip_contents, sections)
+        all_events.extend(fill_events)
 
     return all_events
 

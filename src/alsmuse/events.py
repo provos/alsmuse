@@ -19,8 +19,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 from model2vec import StaticModel
 
+from .fills import detect_drum_fills
 from .midi import check_activity_in_range, detect_midi_activity
-from .models import MidiClipContent, Phrase, TrackEvent
+from .models import MidiClipContent, Phrase, Section, TrackEvent
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -528,3 +529,38 @@ def merge_events_into_phrases(
         )
 
     return result
+
+
+def detect_fill_events(
+    drum_clip_contents: list[MidiClipContent],
+    sections: list[Section],
+) -> list[TrackEvent]:
+    """Convert detected drum fills to TrackEvent objects.
+
+    Analyzes drum MIDI content to detect fills (coordinated density spikes
+    across multiple drum components before section changes) and converts
+    them to TrackEvent objects for integration with the event system.
+
+    Args:
+        drum_clip_contents: List of MidiClipContent from drum tracks.
+        sections: List of Section objects defining song structure.
+
+    Returns:
+        List of TrackEvent objects with event_type="fill".
+    """
+    fills = detect_drum_fills(drum_clip_contents, sections)
+
+    events: list[TrackEvent] = []
+    for fill in fills:
+        context = f"-> {fill.next_section}" if fill.next_section else None
+        events.append(
+            TrackEvent(
+                beat=fill.start_beats,
+                track_name="Drums",
+                event_type="fill",
+                category="drums",
+                fill_context=context,
+            )
+        )
+
+    return events
