@@ -178,6 +178,70 @@ def _extract_audio_clips_from_track(
     return clips
 
 
+def _beats_to_file_seconds(
+    beat_time: float,
+    warp_markers: list[tuple[float, float]],
+    bpm: float,
+) -> float:
+    """Convert clip-internal beat position to file seconds using warp markers.
+
+    Warp markers define a mapping from BeatTime (clip-internal beats) to
+    SecTime (actual position in the audio file). This function interpolates
+    between markers to find the file position for a given beat.
+
+    Args:
+        beat_time: Beat position in clip-internal time (e.g., LoopStart).
+        warp_markers: List of (beat_time, sec_time) tuples, sorted by beat_time.
+        bpm: Project tempo, used as fallback if no warp markers exist.
+
+    Returns:
+        Position in seconds within the audio file.
+    """
+    if not warp_markers:
+        # No warp markers - fall back to BPM conversion
+        return beats_to_seconds(beat_time, bpm)
+
+    # If beat_time is before first marker, extrapolate backwards
+    if beat_time <= warp_markers[0][0]:
+        if len(warp_markers) >= 2:
+            # Use the slope between first two markers
+            beat1, sec1 = warp_markers[0]
+            beat2, sec2 = warp_markers[1]
+            if beat2 != beat1:
+                slope = (sec2 - sec1) / (beat2 - beat1)
+                return sec1 + slope * (beat_time - beat1)
+        # Single marker or same beat position - assume 1:1 mapping at project tempo
+        beat1, sec1 = warp_markers[0]
+        return sec1 + beats_to_seconds(beat_time - beat1, bpm)
+
+    # If beat_time is after last marker, extrapolate forwards
+    if beat_time >= warp_markers[-1][0]:
+        if len(warp_markers) >= 2:
+            # Use the slope between last two markers
+            beat1, sec1 = warp_markers[-2]
+            beat2, sec2 = warp_markers[-1]
+            if beat2 != beat1:
+                slope = (sec2 - sec1) / (beat2 - beat1)
+                return sec2 + slope * (beat_time - beat2)
+        # Single marker - extrapolate at project tempo
+        beat1, sec1 = warp_markers[-1]
+        return sec1 + beats_to_seconds(beat_time - beat1, bpm)
+
+    # Find the two markers surrounding beat_time and interpolate
+    for i in range(len(warp_markers) - 1):
+        beat1, sec1 = warp_markers[i]
+        beat2, sec2 = warp_markers[i + 1]
+        if beat1 <= beat_time <= beat2:
+            if beat2 == beat1:
+                return sec1
+            # Linear interpolation
+            t = (beat_time - beat1) / (beat2 - beat1)
+            return sec1 + t * (sec2 - sec1)
+
+    # Fallback (shouldn't reach here)
+    return beats_to_seconds(beat_time, bpm)
+
+
 def _parse_audio_clip_element(
     clip_elem: Element,
     track_name: str,
@@ -234,23 +298,46 @@ def _parse_audio_clip_element(
         )
         return None
 
+    # Extract warp markers for beat-to-file-time conversion
+    # Warp markers map BeatTime (clip-internal beats) to SecTime (file seconds)
+    warp_markers: list[tuple[float, float]] = []  # (beat_time, sec_time)
+    warp_markers_elem = clip_elem.find(".//WarpMarkers")
+    if warp_markers_elem is not None:
+        for marker in warp_markers_elem.findall("WarpMarker"):
+            sec_time_str = marker.get("SecTime")
+            beat_time_str = marker.get("BeatTime")
+            if sec_time_str is not None and beat_time_str is not None:
+                with contextlib.suppress(ValueError):
+                    warp_markers.append((float(beat_time_str), float(sec_time_str)))
+        # Sort by beat time for interpolation
+        warp_markers.sort(key=lambda x: x[0])
+
     # Extract sample start/end offsets from Loop element
     # These indicate which portion of the audio file to play
-    sample_start_beats: float | None = None
-    sample_end_beats: float | None = None
+    sample_start_seconds: float | None = None
+    sample_end_seconds: float | None = None
 
     loop_elem = clip_elem.find("Loop")
     if loop_elem is not None:
         loop_start_elem = loop_elem.find("LoopStart")
         loop_end_elem = loop_elem.find("LoopEnd")
 
+        loop_start_beats: float | None = None
+        loop_end_beats: float | None = None
+
         if loop_start_elem is not None:
             with contextlib.suppress(ValueError):
-                sample_start_beats = float(loop_start_elem.get("Value", "0"))
+                loop_start_beats = float(loop_start_elem.get("Value", "0"))
 
         if loop_end_elem is not None:
             with contextlib.suppress(ValueError):
-                sample_end_beats = float(loop_end_elem.get("Value", "0"))
+                loop_end_beats = float(loop_end_elem.get("Value", "0"))
+
+        # Convert beats to file seconds using warp markers
+        if loop_start_beats is not None:
+            sample_start_seconds = _beats_to_file_seconds(loop_start_beats, warp_markers, bpm)
+        if loop_end_beats is not None:
+            sample_end_seconds = _beats_to_file_seconds(loop_end_beats, warp_markers, bpm)
 
     # Convert beats to seconds
     start_seconds = beats_to_seconds(start_beats, bpm)
@@ -263,8 +350,8 @@ def _parse_audio_clip_element(
         end_beats=end_beats,
         start_seconds=start_seconds,
         end_seconds=end_seconds,
-        sample_start_beats=sample_start_beats,
-        sample_end_beats=sample_end_beats,
+        sample_start_seconds=sample_start_seconds,
+        sample_end_seconds=sample_end_seconds,
     )
 
 
@@ -494,13 +581,14 @@ def combine_clips_to_audio(
         # Resample if needed (uses torchaudio for speed)
         if sr != sample_rate:
             audio = _resample_audio(audio, sr, sample_rate)
+            # Update sr to reflect the resampled audio's sample rate
+            sr = sample_rate
 
-        # Extract the correct portion of the audio file using Loop offsets
-        # sample_start_beats and sample_end_beats are in beats at project BPM
-        if clip.sample_start_beats is not None and clip.sample_end_beats is not None:
-            # Convert beats to seconds, then to samples
-            sample_start_seconds = beats_to_seconds(clip.sample_start_beats, bpm)
-            sample_end_seconds = beats_to_seconds(clip.sample_end_beats, bpm)
+        # Extract the correct portion of the audio file using sample offsets
+        # These are already converted to file seconds using warp markers
+        if clip.sample_start_seconds is not None and clip.sample_end_seconds is not None:
+            sample_start_seconds = clip.sample_start_seconds
+            sample_end_seconds = clip.sample_end_seconds
 
             sample_start_idx = int(sample_start_seconds * sr)
             sample_end_idx = int(sample_end_seconds * sr)
