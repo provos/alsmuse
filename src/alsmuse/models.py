@@ -61,11 +61,41 @@ class Track:
 
     Tracks organize clips into lanes within the arrangement view.
     Each track has a type indicating whether it contains MIDI or audio data.
+
+    Attributes:
+        name: The track name.
+        track_type: Either "midi" or "audio".
+        clips: Tuple of clips on this track.
+        enabled: Whether the track is enabled (not muted via Speaker).
+        group_id: The ID of the parent group track, or None if not in a group.
     """
 
     name: str
     track_type: Literal["midi", "audio"]
     clips: tuple[Clip, ...]
+    enabled: bool = True
+    group_id: int | None = None
+
+
+@dataclass(frozen=True)
+class Group:
+    """A group track that contains other tracks.
+
+    Groups in Ableton Live are special tracks that organize other tracks
+    together. They can be enabled/disabled to mute all contained tracks.
+    Groups can be nested within other groups.
+
+    Attributes:
+        id: The unique ID of the group track.
+        name: The group name.
+        enabled: Whether the group is enabled (not muted via Speaker).
+        group_id: The ID of the parent group track, or None if not nested.
+    """
+
+    id: int
+    name: str
+    enabled: bool = True
+    group_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -73,11 +103,70 @@ class LiveSet:
     """An Ableton Live Set project.
 
     The top-level container representing a parsed .als file,
-    containing tempo information and all tracks.
+    containing tempo information, tracks, and groups.
+
+    Attributes:
+        tempo: The project tempo and time signature.
+        tracks: Tuple of all tracks (MIDI and audio).
+        groups: Tuple of group tracks for track organization.
     """
 
     tempo: Tempo
     tracks: tuple[Track, ...]
+    groups: tuple[Group, ...] = ()
+
+    def is_group_enabled(self, group_id: int | None) -> bool:
+        """Check if a group and all its parent groups are enabled.
+
+        Args:
+            group_id: The group ID to check, or None.
+
+        Returns:
+            True if the group (and all ancestors) are enabled, or if group_id is None.
+        """
+        if group_id is None:
+            return True
+
+        group_map = {g.id: g for g in self.groups}
+        current_id: int | None = group_id
+
+        while current_id is not None:
+            group = group_map.get(current_id)
+            if group is None:
+                # Group not found, assume enabled
+                return True
+            if not group.enabled:
+                return False
+            current_id = group.group_id
+
+        return True
+
+    def is_track_effectively_enabled(self, track: Track) -> bool:
+        """Check if a track is effectively enabled.
+
+        A track is effectively enabled if:
+        1. The track itself is enabled
+        2. Its parent group (if any) and all ancestor groups are enabled
+
+        Args:
+            track: The track to check.
+
+        Returns:
+            True if the track and all its ancestor groups are enabled.
+        """
+        if not track.enabled:
+            return False
+        return self.is_group_enabled(track.group_id)
+
+    def enabled_tracks(self) -> tuple[Track, ...]:
+        """Return only tracks that are effectively enabled.
+
+        This filters out tracks that are disabled or belong to disabled groups.
+
+        Returns:
+            Tuple of effectively enabled tracks.
+        """
+        return tuple(t for t in self.tracks if self.is_track_effectively_enabled(t))
 
 
 @dataclass(frozen=True)

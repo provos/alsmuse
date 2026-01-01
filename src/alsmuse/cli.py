@@ -10,7 +10,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 import click
 
-from .analyze import analyze_als_v2
+from .analyze import analyze_als
 from .exceptions import ParseError, TrackNotFoundError
 
 
@@ -175,7 +175,7 @@ def analyze(
         # Convert vocal_track tuple to None if empty
         vocal_tracks = vocal_track if vocal_track else None
 
-        result = analyze_als_v2(
+        result = analyze_als(
             als_file,
             structure_track,
             beats_per_phrase,

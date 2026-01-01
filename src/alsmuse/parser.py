@@ -15,7 +15,7 @@ from xml.etree.ElementTree import Element
 from xml.etree.ElementTree import ParseError as XMLParseError
 
 from .exceptions import ParseError
-from .models import Clip, LiveSet, Tempo, Track
+from .models import Clip, Group, LiveSet, Tempo, Track
 
 
 def parse_als_xml(path: Path) -> Element:
@@ -110,6 +110,34 @@ def extract_track_clips(
     return _extract_clips(track_element, "midi" if track_type == "midi" else "audio")
 
 
+def extract_track_enabled(track_element: Element) -> bool:
+    """Extract whether a track is enabled (not muted).
+
+    Public wrapper around _extract_track_enabled.
+
+    Args:
+        track_element: A MidiTrack, AudioTrack, or GroupTrack XML element.
+
+    Returns:
+        True if the track is enabled, False if muted.
+    """
+    return _extract_track_enabled(track_element)
+
+
+def extract_track_group_id(track_element: Element) -> int | None:
+    """Extract the group ID that a track belongs to.
+
+    Public wrapper around _extract_track_group_id.
+
+    Args:
+        track_element: A MidiTrack, AudioTrack, or GroupTrack XML element.
+
+    Returns:
+        The group ID, or None if the track is not in a group.
+    """
+    return _extract_track_group_id(track_element)
+
+
 def parse_als_file(path: Path) -> LiveSet:
     """Parse an Ableton Live Set file into a LiveSet model.
 
@@ -135,8 +163,9 @@ def parse_als_file(path: Path) -> LiveSet:
 
     tempo = _extract_tempo(live_set_elem)
     tracks = _extract_tracks(live_set_elem)
+    groups = _extract_groups(live_set_elem)
 
-    return LiveSet(tempo=tempo, tracks=tracks)
+    return LiveSet(tempo=tempo, tracks=tracks, groups=groups)
 
 
 def _decompress_als(path: Path) -> bytes:
@@ -212,6 +241,84 @@ def _extract_tempo(root: Element) -> Tempo:
     return Tempo(bpm=bpm, time_signature=(numerator, denominator))
 
 
+def _extract_track_enabled(track_element: Element) -> bool:
+    """Extract whether a track is enabled (not muted).
+
+    The enabled state is determined by the Speaker/Manual value in the Mixer.
+    When false, the track output is muted.
+
+    Args:
+        track_element: A MidiTrack, AudioTrack, or GroupTrack XML element.
+
+    Returns:
+        True if the track is enabled, False if muted.
+    """
+    speaker_elem = track_element.find("DeviceChain/Mixer/Speaker/Manual")
+    if speaker_elem is None:
+        return True  # Default to enabled if not found
+    return speaker_elem.get("Value", "true").lower() == "true"
+
+
+def _extract_track_group_id(track_element: Element) -> int | None:
+    """Extract the group ID that a track belongs to.
+
+    Args:
+        track_element: A MidiTrack, AudioTrack, or GroupTrack XML element.
+
+    Returns:
+        The group ID, or None if the track is not in a group (TrackGroupId is -1).
+    """
+    group_id_elem = track_element.find("TrackGroupId")
+    if group_id_elem is None:
+        return None
+    group_id_str = group_id_elem.get("Value", "-1")
+    try:
+        group_id = int(group_id_str)
+        return None if group_id == -1 else group_id
+    except ValueError:
+        return None
+
+
+def _extract_groups(root: Element) -> tuple[Group, ...]:
+    """Extract all group tracks from the LiveSet element.
+
+    Args:
+        root: The LiveSet XML element.
+
+    Returns:
+        A tuple of Group objects.
+    """
+    tracks_elem = root.find("Tracks")
+    if tracks_elem is None:
+        return ()
+
+    groups: list[Group] = []
+
+    for group_track in tracks_elem.findall("GroupTrack"):
+        group_id_str = group_track.get("Id")
+        if group_id_str is None:
+            continue
+        try:
+            group_id = int(group_id_str)
+        except ValueError:
+            continue
+
+        name = _extract_track_name(group_track)
+        enabled = _extract_track_enabled(group_track)
+        parent_group_id = _extract_track_group_id(group_track)
+
+        groups.append(
+            Group(
+                id=group_id,
+                name=name,
+                enabled=enabled,
+                group_id=parent_group_id,
+            )
+        )
+
+    return tuple(groups)
+
+
 def _extract_tracks(root: Element) -> tuple[Track, ...]:
     """Extract all MIDI and Audio tracks from the LiveSet element.
 
@@ -234,13 +341,33 @@ def _extract_tracks(root: Element) -> tuple[Track, ...]:
     for midi_track in tracks_elem.findall("MidiTrack"):
         name = _extract_track_name(midi_track)
         clips = _extract_clips(midi_track, "midi")
-        tracks.append(Track(name=name, track_type="midi", clips=clips))
+        enabled = _extract_track_enabled(midi_track)
+        group_id = _extract_track_group_id(midi_track)
+        tracks.append(
+            Track(
+                name=name,
+                track_type="midi",
+                clips=clips,
+                enabled=enabled,
+                group_id=group_id,
+            )
+        )
 
     # Extract Audio tracks
     for audio_track in tracks_elem.findall("AudioTrack"):
         name = _extract_track_name(audio_track)
         clips = _extract_clips(audio_track, "audio")
-        tracks.append(Track(name=name, track_type="audio", clips=clips))
+        enabled = _extract_track_enabled(audio_track)
+        group_id = _extract_track_group_id(audio_track)
+        tracks.append(
+            Track(
+                name=name,
+                track_type="audio",
+                clips=clips,
+                enabled=enabled,
+                group_id=group_id,
+            )
+        )
 
     return tuple(tracks)
 

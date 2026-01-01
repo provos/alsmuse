@@ -30,7 +30,7 @@ from .events import (
 )
 from .exceptions import AlignmentError
 from .extractors import StructureTrackExtractor, fill_gaps
-from .formatter import format_av_table, format_phrase_table
+from .formatter import format_phrase_table
 from .lyrics import (
     distribute_lyrics,
     distribute_timed_lyrics,
@@ -46,7 +46,7 @@ from .lyrics_align import (
     words_to_lines,
 )
 from .midi import extract_midi_clip_contents
-from .models import MidiClipContent, Phrase, Section, TrackEvent
+from .models import LiveSet, MidiClipContent, Phrase, Section, TrackEvent
 from .parser import (
     extract_track_clips,
     extract_track_name,
@@ -60,37 +60,6 @@ logger = logging.getLogger(__name__)
 
 
 def analyze_als(
-    als_path: Path,
-    structure_track: str = "STRUCTURE",
-) -> str:
-    """Main analysis pipeline.
-
-    1. Parse ALS file
-    2. Extract sections using StructureTrackExtractor
-    3. Fill gaps with transitions
-    4. Format output as markdown A/V table
-
-    Args:
-        als_path: Path to the .als file
-        structure_track: Name of the structure track (case-insensitive)
-
-    Returns:
-        Markdown formatted A/V table string
-
-    Raises:
-        ParseError: If the file cannot be parsed
-        TrackNotFoundError: If the structure track is not found
-    """
-    live_set = parse_als_file(als_path)
-
-    extractor = StructureTrackExtractor(structure_track)
-    sections = extractor.extract(live_set)
-    sections = fill_gaps(sections)
-
-    return format_av_table(sections, live_set.tempo.bpm)
-
-
-def analyze_als_v2(
     als_path: Path,
     structure_track: str = "STRUCTURE",
     beats_per_phrase: int = 8,
@@ -161,7 +130,7 @@ def analyze_als_v2(
 
     # Interactive category review (if TTY available and enabled)
     if show_events and interactive and sys.stdin.isatty():
-        track_names = get_all_track_names(als_path)
+        track_names = get_all_track_names(live_set)
         current_categories = categorize_all_tracks(track_names, category_overrides)
         available_categories = get_available_categories()
 
@@ -248,7 +217,9 @@ def analyze_als_v2(
             phrases = distribute_lyrics(phrases, section_lyrics)
             show_lyrics = True
 
-    return format_phrase_table(phrases, bpm, show_events=show_events, show_lyrics=show_lyrics)
+    return format_phrase_table(
+        phrases, bpm, show_events=show_events, show_lyrics=show_lyrics
+    )
 
 
 def detect_track_events_from_als_phrase_aligned(
@@ -266,6 +237,9 @@ def detect_track_events_from_als_phrase_aligned(
 
     Also detects drum fills when sections are provided.
 
+    Tracks that are disabled (muted) or belong to disabled groups are
+    skipped and will not generate any events.
+
     Args:
         als_path: Path to the .als file
         phrases: List of Phrase objects defining the time boundaries.
@@ -277,6 +251,14 @@ def detect_track_events_from_als_phrase_aligned(
     Returns:
         List of TrackEvent objects for all tracks.
     """
+    # Parse the LiveSet to get track enabled state and group information
+    live_set = parse_als_file(als_path)
+
+    # Build lookup of effectively enabled tracks by name
+    enabled_track_names = {
+        t.name for t in live_set.tracks if live_set.is_track_effectively_enabled(t)
+    }
+
     root = parse_als_xml(als_path)
     track_elements = get_track_elements(root)
 
@@ -288,6 +270,11 @@ def detect_track_events_from_als_phrase_aligned(
             continue
 
         track_name = extract_track_name(track_elem)
+
+        # Skip disabled tracks or tracks in disabled groups
+        if track_name not in enabled_track_names:
+            continue
+
         clips = extract_track_clips(track_elem, track_type)
 
         if not clips:
@@ -321,18 +308,29 @@ def detect_track_events_from_als_phrase_aligned(
     return all_events
 
 
-def extract_track_clip_contents(als_path: Path) -> dict[str, list[MidiClipContent]]:
-    """Extract MIDI clip contents for all tracks in an ALS file.
+def extract_track_clip_contents(
+    live_set: LiveSet,
+    als_path: Path,
+) -> dict[str, list[MidiClipContent]]:
+    """Extract MIDI clip contents for all enabled tracks in an ALS file.
 
-    This is a helper function that can be used for testing or advanced
-    analysis workflows.
+    This is a debugging/testing helper function for advanced analysis workflows.
+
+    Tracks that are disabled (muted) or belong to disabled groups are
+    skipped.
 
     Args:
+        live_set: Pre-parsed LiveSet containing track/group enabled state.
         als_path: Path to the .als file
 
     Returns:
         Dictionary mapping track names to their MidiClipContent lists.
     """
+    # Build lookup of effectively enabled tracks by name
+    enabled_track_names = {
+        t.name for t in live_set.tracks if live_set.is_track_effectively_enabled(t)
+    }
+
     root = parse_als_xml(als_path)
     track_elements = get_track_elements(root)
 
@@ -343,6 +341,11 @@ def extract_track_clip_contents(als_path: Path) -> dict[str, list[MidiClipConten
             continue
 
         track_name = extract_track_name(track_elem)
+
+        # Skip disabled tracks or tracks in disabled groups
+        if track_name not in enabled_track_names:
+            continue
+
         clips = extract_track_clips(track_elem, track_type)
 
         if not clips:
@@ -356,24 +359,18 @@ def extract_track_clip_contents(als_path: Path) -> dict[str, list[MidiClipConten
     return result
 
 
-def get_all_track_names(als_path: Path) -> list[str]:
-    """Get all track names from an ALS file.
+def get_all_track_names(live_set: LiveSet) -> list[str]:
+    """Get all effectively enabled track names from an ALS file.
+
+    Returns only tracks that are enabled and not in disabled groups.
 
     Args:
-        als_path: Path to the .als file
+        live_set: Pre-parsed LiveSet containing track/group enabled state.
 
     Returns:
-        List of track names (both MIDI and audio tracks).
+        List of enabled track names (both MIDI and audio tracks).
     """
-    root = parse_als_xml(als_path)
-    track_elements = get_track_elements(root)
-
-    names: list[str] = []
-    for track_elem, _ in track_elements:
-        name = extract_track_name(track_elem)
-        names.append(name)
-
-    return names
+    return [t.name for t in live_set.tracks if live_set.is_track_effectively_enabled(t)]
 
 
 def align_and_distribute_lyrics(
@@ -480,7 +477,9 @@ def align_and_distribute_lyrics(
         )
 
         # Step 5: Reconstruct lines and distribute to phrases
-        original_lines = [line.strip() for line in all_lyrics_text.split("\n") if line.strip()]
+        original_lines = [
+            line.strip() for line in all_lyrics_text.split("\n") if line.strip()
+        ]
         timed_lines = words_to_lines(timed_words, original_lines)
 
         # Step 6: Save aligned lyrics if requested (in LRC format)

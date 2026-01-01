@@ -74,7 +74,9 @@ def create_midi_clip_xml(
 
             xml_parts.append("    <KeyTracks>")
             for pitch, pitch_notes in notes_by_pitch.items():
-                xml_parts.append(f'      <KeyTrack Id="{pitch}">',)
+                xml_parts.append(
+                    f'      <KeyTrack Id="{pitch}">',
+                )
                 xml_parts.append(f'        <MidiKey Value="{pitch}"/>')
                 xml_parts.append("        <Notes>")
                 for note_time, duration, velocity in pitch_notes:

@@ -7,7 +7,7 @@ formatted output, validating that all components work together correctly.
 import gzip
 from pathlib import Path
 
-from alsmuse.analyze import analyze_als, analyze_als_v2
+from alsmuse.analyze import analyze_als
 
 
 def create_als_file(tmp_path: Path, xml_content: str) -> Path:
@@ -181,42 +181,6 @@ ALS_WITH_MIDI_TRACK = """\
 """
 
 
-class TestAnalyzeAlsV1:
-    """Integration tests for basic section analysis (v1 pipeline)."""
-
-    def test_analyze_produces_markdown_table(self, tmp_path: Path) -> None:
-        """Full pipeline produces valid markdown table."""
-        als_file = create_als_file(tmp_path, MINIMAL_ALS_XML)
-
-        result = analyze_als(als_file)
-
-        assert "| Time | Audio | Video |" in result
-        assert "| 0:00 | INTRO | |" in result
-        assert "| 0:08 | VERSE1 | |" in result
-        assert "| 0:24 | CHORUS | |" in result
-
-    def test_analyze_uses_correct_tempo_for_timing(self, tmp_path: Path) -> None:
-        """Timing calculations use the tempo from the file."""
-        als_file = create_als_file(tmp_path, MINIMAL_ALS_XML)
-
-        result = analyze_als(als_file)
-
-        # At 120 BPM, 16 beats = 8 seconds, 48 beats = 24 seconds
-        assert "0:08" in result  # VERSE1 at beat 16
-        assert "0:24" in result  # CHORUS at beat 48
-
-    def test_analyze_respects_structure_track_option(self, tmp_path: Path) -> None:
-        """Analysis uses the specified structure track name."""
-        # XML with a differently named structure track
-        xml = MINIMAL_ALS_XML.replace("STRUCTURE", "MARKERS")
-        als_file = create_als_file(tmp_path, xml)
-
-        result = analyze_als(als_file, structure_track="MARKERS")
-
-        assert "INTRO" in result
-        assert "VERSE1" in result
-
-
 class TestAnalyzeAlsV2:
     """Integration tests for phrase-level analysis (v2 pipeline)."""
 
@@ -224,14 +188,16 @@ class TestAnalyzeAlsV2:
         """Sections are subdivided into phrase-sized chunks."""
         als_file = create_als_file(tmp_path, MINIMAL_ALS_XML)
 
-        result = analyze_als_v2(als_file, beats_per_phrase=8, show_events=False)
+        result = analyze_als(als_file, beats_per_phrase=8, show_events=False)
 
         # INTRO (16 beats) should produce 2 phrases at 8 beats each
         # VERSE1 (32 beats) should produce 4 phrases
         # CHORUS (32 beats) should produce 4 phrases
         lines = result.strip().split("\n")
         data_rows = [
-            row for row in lines if row.startswith("|") and "Time" not in row and "---" not in row
+            row
+            for row in lines
+            if row.startswith("|") and "Time" not in row and "---" not in row
         ]
         assert len(data_rows) == 10  # 2 + 4 + 4
 
@@ -239,7 +205,7 @@ class TestAnalyzeAlsV2:
         """First phrase of each section shows section name."""
         als_file = create_als_file(tmp_path, MINIMAL_ALS_XML)
 
-        result = analyze_als_v2(als_file, beats_per_phrase=8, show_events=False)
+        result = analyze_als(als_file, beats_per_phrase=8, show_events=False)
 
         assert "INTRO" in result
         assert "VERSE1" in result
@@ -250,7 +216,7 @@ class TestAnalyzeAlsV2:
         """Track enter/exit events are detected and shown."""
         als_file = create_als_file(tmp_path, ALS_WITH_MIDI_TRACK)
 
-        result = analyze_als_v2(als_file, beats_per_phrase=8, show_events=True)
+        result = analyze_als(als_file, beats_per_phrase=8, show_events=True)
 
         # Drums starts at beat 0, Bass enters at beat 16
         assert "Drums enters" in result
@@ -260,7 +226,7 @@ class TestAnalyzeAlsV2:
         """Events are hidden when show_events=False."""
         als_file = create_als_file(tmp_path, ALS_WITH_MIDI_TRACK)
 
-        result = analyze_als_v2(als_file, beats_per_phrase=8, show_events=False)
+        result = analyze_als(als_file, beats_per_phrase=8, show_events=False)
 
         assert "Events" not in result
         assert "enters" not in result
@@ -269,7 +235,7 @@ class TestAnalyzeAlsV2:
         """Output has Time, Audio, and Video columns."""
         als_file = create_als_file(tmp_path, ALS_WITH_MIDI_TRACK)
 
-        result = analyze_als_v2(als_file, beats_per_phrase=8, show_events=True)
+        result = analyze_als(als_file, beats_per_phrase=8, show_events=True)
 
         header_line = result.split("\n")[0]
         assert "Time" in header_line
@@ -287,7 +253,7 @@ class TestLyricsIntegration:
         lyrics_file = tmp_path / "lyrics.txt"
         lyrics_file.write_text("[VERSE1]\nFirst verse line\nSecond verse line\n")
 
-        result = analyze_als_v2(
+        result = analyze_als(
             als_file, beats_per_phrase=8, show_events=False, lyrics_path=lyrics_file
         )
 
@@ -302,7 +268,7 @@ class TestLyricsIntegration:
         lyrics_file = tmp_path / "lyrics.txt"
         lyrics_file.write_text("[VERSE1]\nLine one\nLine two\n")
 
-        result = analyze_als_v2(
+        result = analyze_als(
             als_file, beats_per_phrase=8, show_events=False, lyrics_path=lyrics_file
         )
 
@@ -317,7 +283,7 @@ class TestLyricsIntegration:
         lyrics_file = tmp_path / "lyrics.txt"
         lyrics_file.write_text("[CHORUS]\nChorus lyric\n")
 
-        result = analyze_als_v2(
+        result = analyze_als(
             als_file, beats_per_phrase=8, show_events=False, lyrics_path=lyrics_file
         )
 
@@ -334,7 +300,7 @@ class TestLyricsIntegration:
         lyrics_file = tmp_path / "lyrics.txt"
         lyrics_file.write_text("[VERSE1]\nVerse with events\n")
 
-        result = analyze_als_v2(
+        result = analyze_als(
             als_file, beats_per_phrase=8, show_events=True, lyrics_path=lyrics_file
         )
 
@@ -391,7 +357,7 @@ class TestEdgeCases:
 """
         als_file = create_als_file(tmp_path, xml)
 
-        result = analyze_als_v2(als_file, beats_per_phrase=8, show_events=False)
+        result = analyze_als(als_file, beats_per_phrase=8, show_events=False)
 
         assert "SHORT" in result
 
@@ -438,7 +404,7 @@ class TestEdgeCases:
 """
         als_file = create_als_file(tmp_path, xml)
 
-        result = analyze_als(als_file)
+        result = analyze_als(als_file, beats_per_phrase=8, show_events=False)
 
         # At 90 BPM, 24 beats should end at 16 seconds
         # First section starts at 0:00
@@ -449,7 +415,7 @@ class TestEdgeCases:
         als_file = create_als_file(tmp_path, MINIMAL_ALS_XML)
 
         # Should not crash even though structure track has no notes
-        result = analyze_als_v2(als_file, beats_per_phrase=8, show_events=True)
+        result = analyze_als(als_file, beats_per_phrase=8, show_events=True)
 
         assert "INTRO" in result
 
@@ -479,7 +445,9 @@ class TestDistributeTimedLyrics:
         from alsmuse.models import Phrase
 
         phrases = [
-            Phrase(start_beats=0, end_beats=8, section_name="V1", is_section_start=True),
+            Phrase(
+                start_beats=0, end_beats=8, section_name="V1", is_section_start=True
+            ),
         ]
 
         result = distribute_timed_lyrics(phrases, [], bpm=120.0)
@@ -493,7 +461,9 @@ class TestDistributeTimedLyrics:
 
         # At 120 BPM, 8 beats = 4 seconds
         phrases = [
-            Phrase(start_beats=0, end_beats=8, section_name="V1", is_section_start=True),
+            Phrase(
+                start_beats=0, end_beats=8, section_name="V1", is_section_start=True
+            ),
         ]
 
         timed_lines = [
@@ -520,7 +490,9 @@ class TestDistributeTimedLyrics:
 
         # At 120 BPM, 8 beats = 4 seconds
         phrases = [
-            Phrase(start_beats=0, end_beats=8, section_name="V1", is_section_start=True),
+            Phrase(
+                start_beats=0, end_beats=8, section_name="V1", is_section_start=True
+            ),
         ]
 
         timed_lines = [
@@ -552,8 +524,12 @@ class TestDistributeTimedLyrics:
         # Phrase 1: 0-8 beats = 0-4 seconds
         # Phrase 2: 8-16 beats = 4-8 seconds
         phrases = [
-            Phrase(start_beats=0, end_beats=8, section_name="V1", is_section_start=True),
-            Phrase(start_beats=8, end_beats=16, section_name="...", is_section_start=False),
+            Phrase(
+                start_beats=0, end_beats=8, section_name="V1", is_section_start=True
+            ),
+            Phrase(
+                start_beats=8, end_beats=16, section_name="...", is_section_start=False
+            ),
         ]
 
         timed_lines = [
@@ -584,7 +560,9 @@ class TestDistributeTimedLyrics:
 
         # Phrase starts at 8 beats = 4 seconds at 120 BPM
         phrases = [
-            Phrase(start_beats=8, end_beats=16, section_name="V1", is_section_start=True),
+            Phrase(
+                start_beats=8, end_beats=16, section_name="V1", is_section_start=True
+            ),
         ]
 
         timed_lines = [
@@ -613,7 +591,9 @@ class TestDistributeTimedLyrics:
         from alsmuse.models import Phrase, TimedLine, TimedWord
 
         phrases = [
-            Phrase(start_beats=0, end_beats=8, section_name="V1", is_section_start=True),
+            Phrase(
+                start_beats=0, end_beats=8, section_name="V1", is_section_start=True
+            ),
         ]
 
         timed_lines = [
@@ -636,7 +616,9 @@ class TestDistributeTimedLyrics:
         from alsmuse.lyrics import distribute_timed_lyrics
         from alsmuse.models import Phrase, TrackEvent
 
-        event = TrackEvent(beat=0, track_name="Bass", event_type="enter", category="bass")
+        event = TrackEvent(
+            beat=0, track_name="Bass", event_type="enter", category="bass"
+        )
         phrases = [
             Phrase(
                 start_beats=10,
@@ -668,7 +650,7 @@ class TestAlignmentFallback:
         lyrics_file.write_text("[VERSE1]\nTest lyric line\n")
 
         # Should fall back to heuristic and still show lyrics
-        result = analyze_als_v2(
+        result = analyze_als(
             als_file,
             beats_per_phrase=8,
             show_events=False,
@@ -687,7 +669,7 @@ class TestAlignmentFallback:
         lyrics_file = tmp_path / "lyrics.txt"
         lyrics_file.write_text("[VERSE1]\nHeuristic lyric\n")
 
-        result = analyze_als_v2(
+        result = analyze_als(
             als_file,
             beats_per_phrase=8,
             show_events=False,
@@ -768,7 +750,8 @@ class TestCLIOptions:
 
         # Try to use both --transcribe and --lyrics
         result = runner.invoke(
-            main, ["analyze", str(als_file), "--transcribe", "--lyrics", str(lyrics_file)]
+            main,
+            ["analyze", str(als_file), "--transcribe", "--lyrics", str(lyrics_file)],
         )
 
         assert result.exit_code != 0
@@ -838,7 +821,9 @@ class TestCLIOptions:
         output_file = tmp_path / "av_table.md"
 
         # Run with --output option
-        result = runner.invoke(main, ["analyze", str(als_file), "--output", str(output_file)])
+        result = runner.invoke(
+            main, ["analyze", str(als_file), "--output", str(output_file)]
+        )
 
         assert result.exit_code == 0
         assert output_file.exists()
@@ -878,11 +863,13 @@ class TestTimestampedLyricsBypassAlignment:
 
         # Create LRC lyrics file with timestamps
         lyrics_file = tmp_path / "lyrics.lrc"
-        lyrics_file.write_text("[00:08.00]First verse line\n[00:12.00]Second verse line\n")
+        lyrics_file.write_text(
+            "[00:08.00]First verse line\n[00:12.00]Second verse line\n"
+        )
 
         # With align_vocals=True but timestamped lyrics, alignment is bypassed
         # This would fail if alignment were attempted (no audio tracks)
-        result = analyze_als_v2(
+        result = analyze_als(
             als_file,
             beats_per_phrase=8,
             show_events=False,
@@ -909,7 +896,7 @@ class TestTimestampedLyricsBypassAlignment:
         lyrics_file.write_text("0:08.00 First verse line\n0:12.00 Second verse line\n")
 
         # With align_vocals=True but timestamped lyrics, alignment is bypassed
-        result = analyze_als_v2(
+        result = analyze_als(
             als_file,
             beats_per_phrase=8,
             show_events=False,
@@ -937,7 +924,7 @@ class TestTimestampedLyricsBypassAlignment:
         )
 
         # With align_vocals=True but timestamped lyrics, alignment is bypassed
-        result = analyze_als_v2(
+        result = analyze_als(
             als_file,
             beats_per_phrase=8,
             show_events=False,
@@ -949,7 +936,9 @@ class TestTimestampedLyricsBypassAlignment:
         assert "First verse line" in result
         assert "Second verse line" in result
 
-    def test_plain_text_lyrics_with_align_triggers_alignment(self, tmp_path: Path) -> None:
+    def test_plain_text_lyrics_with_align_triggers_alignment(
+        self, tmp_path: Path
+    ) -> None:
         """Plain text lyrics with align_vocals=True attempts alignment.
 
         Since MINIMAL_ALS_XML has no audio tracks, alignment fails and
@@ -965,7 +954,7 @@ class TestTimestampedLyricsBypassAlignment:
 
         # With align_vocals=True and plain text, alignment is attempted
         # Since we have no audio tracks, it will fail and fall back to heuristic
-        result = analyze_als_v2(
+        result = analyze_als(
             als_file,
             beats_per_phrase=8,
             show_events=False,
@@ -1010,7 +999,8 @@ class TestLanguageAndModelPassing:
 
         with (
             patch(
-                "alsmuse.lyrics_align.split_audio_on_silence", return_value=mock_audio_segments
+                "alsmuse.lyrics_align.split_audio_on_silence",
+                return_value=mock_audio_segments,
             ),
             patch(
                 "alsmuse.lyrics_align._transcribe_single_segment",
@@ -1060,7 +1050,8 @@ class TestLanguageAndModelPassing:
 
         with (
             patch(
-                "alsmuse.lyrics_align.split_audio_on_silence", return_value=mock_audio_segments
+                "alsmuse.lyrics_align.split_audio_on_silence",
+                return_value=mock_audio_segments,
             ),
             patch(
                 "alsmuse.lyrics_align._transcribe_single_segment",
