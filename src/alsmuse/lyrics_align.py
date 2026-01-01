@@ -13,8 +13,8 @@ Features:
     - **Segment-based line breaking**: Use Whisper's natural phrase boundaries
       for transcription, splitting only long segments for readability.
 
-The stable-ts dependency is optional - import errors are handled gracefully
-with helpful error messages. Install with: pip install 'alsmuse[align]'
+For faster transcription on Apple Silicon, install the optional mlx-whisper
+backend: pip install 'alsmuse[align-mlx]'
 
 Key Functions:
     - align_lyrics: Force-align lyrics text to audio with word-level timing.
@@ -32,6 +32,8 @@ import shutil
 import tempfile
 import unicodedata
 from pathlib import Path
+
+import stable_whisper  # type: ignore[import-untyped]
 
 from .audio import split_audio_on_silence
 from .exceptions import AlignmentError
@@ -257,19 +259,9 @@ def align_lyrics(
         List of TimedWord with hallucinations removed.
 
     Raises:
-        AlignmentError: If stable-ts is not installed or alignment fails.
+        AlignmentError: If alignment fails.
     """
-    try:
-        import stable_whisper  # type: ignore[import-not-found,import-untyped]  # noqa: PLC0415
-        import torch  # noqa: F401,PLC0415  # type: ignore[import-not-found,import-untyped]
-    except ImportError as e:
-        raise AlignmentError(
-            "stable-ts is not installed. "
-            "Install alignment dependencies with: pip install 'alsmuse[align]'"
-        ) from e
-
     # Select optimal compute device (GPU/MPS/CPU)
-    # Note: torch import above ensures PyTorch is available for get_compute_device()
     device = get_compute_device()
 
     # MPS doesn't support float64 which stable-ts requires internally.
@@ -426,12 +418,8 @@ def _transcribe_with_stable_ts(
         List of TimedSegment from transcription.
 
     Raises:
-        ImportError: If stable-ts is not installed.
         AlignmentError: If transcription fails.
     """
-    import stable_whisper  # type: ignore[import-not-found,import-untyped]  # noqa: PLC0415
-    import torch  # noqa: F401,PLC0415  # type: ignore[import-not-found,import-untyped]
-
     # Select optimal compute device (GPU/MPS/CPU)
     device = get_compute_device()
 
@@ -494,21 +482,13 @@ def _transcribe_single_segment(
 
     Returns:
         List of TimedSegment from transcription.
-
-    Raises:
-        AlignmentError: If no transcription backend is available.
     """
     try:
+        # Try mlx-whisper first (faster on Apple Silicon)
         return _transcribe_with_mlx_whisper(audio_path, language, model_size, time_offset)
     except ImportError:
-        try:
-            return _transcribe_with_stable_ts(audio_path, language, model_size, time_offset)
-        except ImportError as e:
-            raise AlignmentError(
-                "No transcription backend available. Install one of:\n"
-                "  - pip install 'alsmuse[align-mlx]'  (fast, Apple Silicon only)\n"
-                "  - pip install 'alsmuse[align]'      (cross-platform)"
-            ) from e
+        # Fall back to stable-ts (always available)
+        return _transcribe_with_stable_ts(audio_path, language, model_size, time_offset)
 
 
 def transcribe_lyrics(

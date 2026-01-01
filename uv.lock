@@ -14,7 +14,6 @@ dependencies = [
     { name = "click" },
     { name = "librosa" },
     { name = "matplotlib" },
-    { name = "mlx-whisper" },
     { name = "model2vec" },
     { name = "numpy" },
     { name = "plotly" },
@@ -22,6 +21,11 @@ dependencies = [
     { name = "rich" },
     { name = "soundfile" },
     { name = "stable-ts" },
+]
+
+[package.optional-dependencies]
+align-mlx = [
+    { name = "mlx-whisper" },
 ]
 
 [package.dev-dependencies]
@@ -36,7 +40,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.1.0" },
     { name = "librosa", specifier = ">=0.10.0" },
     { name = "matplotlib", specifier = ">=3.8.0" },
-    { name = "mlx-whisper", specifier = ">=0.4.0" },
+    { name = "mlx-whisper", marker = "extra == 'align-mlx'", specifier = ">=0.4.0" },
     { name = "model2vec", specifier = ">=0.4.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "plotly", specifier = ">=5.18.0" },
@@ -45,6 +49,7 @@ requires-dist = [
     { name = "soundfile", specifier = ">=0.13.1" },
     { name = "stable-ts", specifier = ">=2.16.0" },
 ]
+provides-extras = ["align-mlx"]
 
 [package.metadata.requires-dev]
 dev = [

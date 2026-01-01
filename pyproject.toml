@@ -15,8 +15,11 @@ dependencies = [
     "stable-ts>=2.16.0",
     "soundfile>=0.13.1",
     "questionary>=2.1.1",
-    "mlx-whisper>=0.4.0",
 ]
+
+[project.optional-dependencies]
+# Faster transcription on Apple Silicon
+align-mlx = ["mlx-whisper>=0.4.0"]
 
 [project.scripts]
 alsmuse = "alsmuse.cli:main"

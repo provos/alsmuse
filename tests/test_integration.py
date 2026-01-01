@@ -698,37 +698,6 @@ class TestAlignmentFallback:
         assert "Heuristic lyric" in result
 
 
-class TestCheckAlignmentDependencies:
-    """Tests for dependency validation function."""
-
-    def test_check_returns_empty_when_all_installed(self) -> None:
-        """Returns empty list when all dependencies are available."""
-        from unittest.mock import MagicMock, patch
-
-        mock_stable_whisper = MagicMock()
-        mock_soundfile = MagicMock()
-
-        with patch.dict(
-            "sys.modules",
-            {"stable_whisper": mock_stable_whisper, "soundfile": mock_soundfile},
-        ):
-            from alsmuse.audio import check_alignment_dependencies
-
-            result = check_alignment_dependencies()
-
-        # Note: The actual check happens inside the function, so we can't truly
-        # mock this without reloading. Let's just verify the function exists
-        # and returns a list.
-        assert isinstance(result, list)
-
-    def test_check_function_exists(self) -> None:
-        """Verify check_alignment_dependencies is importable."""
-        from alsmuse.audio import check_alignment_dependencies
-
-        # Function should be callable
-        assert callable(check_alignment_dependencies)
-
-
 class TestCLIOptions:
     """Tests for CLI option parsing."""
 

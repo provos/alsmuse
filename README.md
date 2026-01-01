@@ -209,7 +209,8 @@ CLI (cli.py) --> Application (analyze.py) --> Parser + Extractors + Formatter
 ## Requirements
 
 - Python 3.12+
-- For lyrics alignment: stable-ts or mlx-whisper, soundfile, questionary
+- All core dependencies (including stable-ts for transcription) are installed by default
+- Optional: mlx-whisper for faster transcription on Apple Silicon (`pip install 'alsmuse[align-mlx]'`)
 
 ## License
 

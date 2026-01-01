@@ -11,7 +11,6 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 import click
 
 from .analyze import analyze_als_v2
-from .audio import check_alignment_dependencies
 from .exceptions import ParseError, TrackNotFoundError
 
 
@@ -162,30 +161,12 @@ def analyze(
         align_vocals = lyrics is not None
 
     # Validate alignment options
-    if align_vocals:
-        # Check that lyrics is provided first (before checking dependencies)
-        if lyrics is None:
-            click.echo(
-                "Error: --align-vocals requires --lyrics to be specified.",
-                err=True,
-            )
-            sys.exit(1)
-
-        # Then check for required dependencies
-        errors = check_alignment_dependencies()
-        if errors:
-            for err in errors:
-                click.echo(f"Error: {err}", err=True)
-            sys.exit(1)
-
-    # Validate transcription options
-    if transcribe:
-        # Check for required dependencies
-        errors = check_alignment_dependencies()
-        if errors:
-            for err in errors:
-                click.echo(f"Error: {err}", err=True)
-            sys.exit(1)
+    if align_vocals and lyrics is None:
+        click.echo(
+            "Error: --align-vocals requires --lyrics to be specified.",
+            err=True,
+        )
+        sys.exit(1)
 
     try:
         # Convert bars to beats (assuming 4/4 time)

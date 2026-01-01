@@ -442,22 +442,6 @@ class TestTimedLineModel:
 class TestAlignLyrics:
     """Tests for align_lyrics function."""
 
-    def test_raises_error_when_stable_whisper_not_installed(self) -> None:
-        """Raises AlignmentError when stable-ts is not installed."""
-        with patch.dict("sys.modules", {"stable_whisper": None}):
-            import importlib
-
-            from alsmuse import lyrics_align
-
-            importlib.reload(lyrics_align)
-
-            with pytest.raises(AlignmentError, match="stable-ts.*not installed"):
-                lyrics_align.align_lyrics(
-                    audio_path=Path("/fake/audio.wav"),
-                    lyrics_text="Hello world",
-                    valid_ranges=[(0.0, 10.0)],
-                )
-
     def test_successful_alignment_with_mocked_model(self) -> None:
         """Successful alignment returns filtered TimedWord list."""
         # Create mock word objects
@@ -993,30 +977,6 @@ class TestTranscribeLyrics:
     These tests mock split_audio_on_silence and _transcribe_single_segment
     to test the segment-based transcription logic without reading real files.
     """
-
-    def test_raises_error_when_no_backend_installed(self) -> None:
-        """Raises AlignmentError when no transcription backend is installed."""
-        import importlib
-
-        from alsmuse import lyrics_align
-
-        # Mock split_audio_on_silence to return one segment
-        mock_segments = [(Path("/fake/segment_0.wav"), 0.0, 5.0)]
-
-        with patch.dict("sys.modules", {"stable_whisper": None, "mlx_whisper": None}):
-            importlib.reload(lyrics_align)
-
-            # Patch after reload so the new module reference is patched
-            with (
-                patch(
-                    "alsmuse.lyrics_align.split_audio_on_silence", return_value=mock_segments
-                ),
-                pytest.raises(AlignmentError, match="No transcription backend"),
-            ):
-                lyrics_align.transcribe_lyrics(
-                    audio_path=Path("/fake/audio.wav"),
-                    valid_ranges=[(0.0, 10.0)],
-                )
 
     def test_successful_transcription_with_mocked_segments(self) -> None:
         """Successful transcription returns TimedSegment list from segments."""
