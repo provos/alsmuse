@@ -1014,8 +1014,14 @@ class TestLanguageAndModelPassing:
         mock_torch.cuda.is_available.return_value = False
         mock_torch.backends.mps.is_available.return_value = False
 
+        # Mock mlx_whisper to not be available, so stable_whisper is used
         with patch.dict(
-            "sys.modules", {"stable_whisper": mock_stable_whisper, "torch": mock_torch}
+            "sys.modules",
+            {
+                "stable_whisper": mock_stable_whisper,
+                "torch": mock_torch,
+                "mlx_whisper": None,
+            },
         ):
             import importlib
             from pathlib import Path
@@ -1066,8 +1072,14 @@ class TestLanguageAndModelPassing:
         mock_torch.cuda.is_available.return_value = False
         mock_torch.backends.mps.is_available.return_value = False
 
+        # Mock mlx_whisper to not be available, so stable_whisper is used
         with patch.dict(
-            "sys.modules", {"stable_whisper": mock_stable_whisper, "torch": mock_torch}
+            "sys.modules",
+            {
+                "stable_whisper": mock_stable_whisper,
+                "torch": mock_torch,
+                "mlx_whisper": None,
+            },
         ):
             import importlib
             from pathlib import Path

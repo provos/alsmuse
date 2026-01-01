@@ -986,16 +986,16 @@ class TestTimedSegmentModel:
 class TestTranscribeLyrics:
     """Tests for transcribe_lyrics function."""
 
-    def test_raises_error_when_stable_whisper_not_installed(self) -> None:
-        """Raises AlignmentError when stable-ts is not installed."""
-        with patch.dict("sys.modules", {"stable_whisper": None}):
+    def test_raises_error_when_no_backend_installed(self) -> None:
+        """Raises AlignmentError when no transcription backend is installed."""
+        with patch.dict("sys.modules", {"stable_whisper": None, "mlx_whisper": None}):
             import importlib
 
             from alsmuse import lyrics_align
 
             importlib.reload(lyrics_align)
 
-            with pytest.raises(AlignmentError, match="stable-ts.*not installed"):
+            with pytest.raises(AlignmentError, match="No transcription backend"):
                 lyrics_align.transcribe_lyrics(
                     audio_path=Path("/fake/audio.wav"),
                     valid_ranges=[(0.0, 10.0)],
@@ -1038,8 +1038,14 @@ class TestTranscribeLyrics:
         mock_torch.cuda.is_available.return_value = False
         mock_torch.backends.mps.is_available.return_value = False
 
+        # Mock mlx_whisper to not be available, so stable_whisper is used
         with patch.dict(
-            "sys.modules", {"stable_whisper": mock_stable_whisper, "torch": mock_torch}
+            "sys.modules",
+            {
+                "stable_whisper": mock_stable_whisper,
+                "torch": mock_torch,
+                "mlx_whisper": None,
+            },
         ):
             import importlib
 
@@ -1098,8 +1104,14 @@ class TestTranscribeLyrics:
         mock_torch.cuda.is_available.return_value = False
         mock_torch.backends.mps.is_available.return_value = False
 
+        # Mock mlx_whisper to not be available, so stable_whisper is used
         with patch.dict(
-            "sys.modules", {"stable_whisper": mock_stable_whisper, "torch": mock_torch}
+            "sys.modules",
+            {
+                "stable_whisper": mock_stable_whisper,
+                "torch": mock_torch,
+                "mlx_whisper": None,
+            },
         ):
             import importlib
 
@@ -1143,8 +1155,14 @@ class TestTranscribeLyrics:
         mock_torch.cuda.is_available.return_value = False
         mock_torch.backends.mps.is_available.return_value = True  # macOS
 
+        # Mock mlx_whisper to not be available, so stable_whisper is used
         with patch.dict(
-            "sys.modules", {"stable_whisper": mock_stable_whisper, "torch": mock_torch}
+            "sys.modules",
+            {
+                "stable_whisper": mock_stable_whisper,
+                "torch": mock_torch,
+                "mlx_whisper": None,
+            },
         ):
             import importlib
 
@@ -1173,8 +1191,14 @@ class TestTranscribeLyrics:
         mock_torch.cuda.is_available.return_value = False
         mock_torch.backends.mps.is_available.return_value = False
 
+        # Mock mlx_whisper to not be available, so stable_whisper is used
         with patch.dict(
-            "sys.modules", {"stable_whisper": mock_stable_whisper, "torch": mock_torch}
+            "sys.modules",
+            {
+                "stable_whisper": mock_stable_whisper,
+                "torch": mock_torch,
+                "mlx_whisper": None,
+            },
         ):
             import importlib
 

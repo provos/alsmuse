@@ -638,9 +638,9 @@ def select_vocal_tracks(
 def check_alignment_dependencies() -> list[str]:
     """Check that all required dependencies for alignment are available.
 
-    Validates that the optional packages stable-ts and soundfile are installed.
-    This should be called at the CLI level before attempting alignment to
-    provide helpful error messages to users.
+    Validates that at least one transcription backend (mlx-whisper or stable-ts)
+    and soundfile are installed. This should be called at the CLI level before
+    attempting alignment to provide helpful error messages to users.
 
     Returns:
         List of error messages describing missing dependencies.
@@ -648,12 +648,29 @@ def check_alignment_dependencies() -> list[str]:
     """
     errors: list[str] = []
 
-    # Check stable-ts
+    # Check for at least one transcription backend
+    has_mlx_whisper = False
+    has_stable_ts = False
+
+    try:
+        import mlx_whisper  # type: ignore[import-not-found,import-untyped]  # noqa: F401
+
+        has_mlx_whisper = True
+    except ImportError:
+        pass
+
     try:
         import stable_whisper  # type: ignore[import-not-found,import-untyped]  # noqa: F401
+
+        has_stable_ts = True
     except ImportError:
+        pass
+
+    if not has_mlx_whisper and not has_stable_ts:
         errors.append(
-            "stable-ts not installed. Run: pip install 'alsmuse[align]'"
+            "No transcription backend installed. Run one of:\n"
+            "  pip install 'alsmuse[align-mlx]'  (fast, Apple Silicon)\n"
+            "  pip install 'alsmuse[align]'      (cross-platform)"
         )
 
     # Check soundfile

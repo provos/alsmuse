@@ -332,48 +332,102 @@ def filter_segments_to_valid_ranges(
     return [s for s in segments if is_in_valid_range(s)]
 
 
-def transcribe_lyrics(
+def _transcribe_with_mlx_whisper(
     audio_path: Path,
-    valid_ranges: list[tuple[float, float]],
-    language: str = "en",
-    model_size: str = "base",
-) -> tuple[list[TimedSegment], str]:
-    """Transcribe lyrics from audio using Whisper ASR.
-
-    Uses stable-ts for transcription, preserving segment boundaries.
-    Filters results to only include content within known valid audio
-    ranges (hallucination filtering).
+    language: str,
+    model_size: str,
+) -> list[TimedSegment]:
+    """Transcribe using mlx-whisper (fast on Apple Silicon).
 
     Args:
-        audio_path: Path to combined vocal audio.
-        valid_ranges: List of (start, end) tuples where real audio exists.
-        language: Language code for transcription model.
+        audio_path: Path to audio file.
+        language: Language code.
         model_size: Whisper model size.
 
     Returns:
-        Tuple of:
-        - List of TimedSegment preserving Whisper's phrase boundaries.
-        - Raw transcription text (for saving to file).
+        List of TimedSegment from transcription.
 
     Raises:
-        AlignmentError: If stable-ts is not installed or transcription fails.
+        ImportError: If mlx-whisper is not installed.
+        AlignmentError: If transcription fails.
     """
+    import mlx_whisper  # type: ignore[import-not-found,import-untyped]
+
+    # Map model size to HuggingFace repo
+    model_map = {
+        "tiny": "mlx-community/whisper-tiny-mlx",
+        "base": "mlx-community/whisper-base-mlx",
+        "small": "mlx-community/whisper-small-mlx",
+        "medium": "mlx-community/whisper-medium-mlx",
+        "large": "mlx-community/whisper-large-v3-mlx",
+    }
+    model_repo = model_map.get(model_size, model_map["base"])
+
     try:
-        import stable_whisper  # type: ignore[import-not-found,import-untyped]
-        import torch  # noqa: F401  # type: ignore[import-not-found,import-untyped]
-    except ImportError as e:
-        raise AlignmentError(
-            "stable-ts is not installed. "
-            "Install alignment dependencies with: pip install 'alsmuse[align]'"
-        ) from e
+        result = mlx_whisper.transcribe(
+            str(audio_path),
+            path_or_hf_repo=model_repo,
+            language=language,
+            word_timestamps=True,
+        )
+    except Exception as e:
+        raise AlignmentError(f"MLX transcription failed: {e}") from e
+
+    # Build segments from mlx-whisper result
+    all_segments: list[TimedSegment] = []
+    for segment in result.get("segments", []):
+        words: list[TimedWord] = []
+        for word_info in segment.get("words", []):
+            word_text = word_info.get("word", "").strip()
+            if word_text:
+                words.append(
+                    TimedWord(
+                        text=word_text,
+                        start=word_info.get("start", 0.0),
+                        end=word_info.get("end", 0.0),
+                    )
+                )
+
+        if words:
+            segment_text = segment.get("text", "").strip()
+            all_segments.append(
+                TimedSegment(
+                    text=segment_text,
+                    start=segment.get("start", 0.0),
+                    end=segment.get("end", 0.0),
+                    words=tuple(words),
+                )
+            )
+
+    return all_segments
+
+
+def _transcribe_with_stable_ts(
+    audio_path: Path,
+    language: str,
+    model_size: str,
+) -> list[TimedSegment]:
+    """Transcribe using stable-ts (cross-platform, slower on Mac).
+
+    Args:
+        audio_path: Path to audio file.
+        language: Language code.
+        model_size: Whisper model size.
+
+    Returns:
+        List of TimedSegment from transcription.
+
+    Raises:
+        ImportError: If stable-ts is not installed.
+        AlignmentError: If transcription fails.
+    """
+    import stable_whisper  # type: ignore[import-not-found,import-untyped]
+    import torch  # noqa: F401  # type: ignore[import-not-found,import-untyped]
 
     # Select optimal compute device (GPU/MPS/CPU)
-    # Note: torch import above ensures PyTorch is available for get_compute_device()
     device = get_compute_device()
 
     # MPS doesn't support float64 which stable-ts requires internally.
-    # Fall back to CPU for reliable operation on macOS.
-    # CPU is still fast for transcription (uses all cores).
     if device == "mps":
         device = "cpu"
 
@@ -390,11 +444,10 @@ def transcribe_lyrics(
     # Build segments from Whisper result
     all_segments: list[TimedSegment] = []
     for segment in result.segments:
-        # Extract words from segment
         words: list[TimedWord] = []
         for word in segment.words:
             word_text = word.word.strip()
-            if word_text:  # Skip empty words
+            if word_text:
                 words.append(
                     TimedWord(
                         text=word_text,
@@ -403,7 +456,7 @@ def transcribe_lyrics(
                     )
                 )
 
-        if words:  # Only create segment if it has words
+        if words:
             segment_text = segment.text.strip()
             all_segments.append(
                 TimedSegment(
@@ -413,6 +466,49 @@ def transcribe_lyrics(
                     words=tuple(words),
                 )
             )
+
+    return all_segments
+
+
+def transcribe_lyrics(
+    audio_path: Path,
+    valid_ranges: list[tuple[float, float]],
+    language: str = "en",
+    model_size: str = "base",
+) -> tuple[list[TimedSegment], str]:
+    """Transcribe lyrics from audio using Whisper ASR.
+
+    Uses mlx-whisper on Apple Silicon for fast transcription, falling back
+    to stable-ts on other platforms. Preserves segment boundaries and filters
+    results to only include content within known valid audio ranges.
+
+    Args:
+        audio_path: Path to combined vocal audio.
+        valid_ranges: List of (start, end) tuples where real audio exists.
+        language: Language code for transcription model.
+        model_size: Whisper model size.
+
+    Returns:
+        Tuple of:
+        - List of TimedSegment preserving Whisper's phrase boundaries.
+        - Raw transcription text (for saving to file).
+
+    Raises:
+        AlignmentError: If no transcription backend is available.
+    """
+    # Try mlx-whisper first (fast on Apple Silicon)
+    try:
+        all_segments = _transcribe_with_mlx_whisper(audio_path, language, model_size)
+    except ImportError:
+        # mlx-whisper not installed, try stable-ts
+        try:
+            all_segments = _transcribe_with_stable_ts(audio_path, language, model_size)
+        except ImportError as e:
+            raise AlignmentError(
+                "No transcription backend available. Install one of:\n"
+                "  - pip install 'alsmuse[align-mlx]'  (fast, Apple Silicon only)\n"
+                "  - pip install 'alsmuse[align]'      (cross-platform)"
+            ) from e
 
     # Filter segments to valid ranges
     filtered_segments = filter_segments_to_valid_ranges(all_segments, valid_ranges)
