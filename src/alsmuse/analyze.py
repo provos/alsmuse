@@ -84,6 +84,7 @@ def analyze_als_v2(
     save_lyrics_path: Path | None = None,
     language: str = "en",
     model_size: str = "base",
+    interactive: bool = True,
 ) -> str:
     """Analysis pipeline with phrase subdivision and event detection.
 
@@ -92,13 +93,15 @@ def analyze_als_v2(
     track enter/exit events.
 
     1. Parse ALS file
-    2. Extract sections using StructureTrackExtractor
-    3. Fill gaps with transitions
-    4. Subdivide sections into phrases
-    5. Optionally detect MIDI events and merge into phrases
-    6. Optionally transcribe lyrics from vocal audio (if transcribe=True)
-    7. Optionally parse and distribute lyrics (with optional forced alignment)
-    8. Format output as markdown phrase table
+    2. Load config if exists (vocal tracks, category overrides)
+    3. Extract sections using StructureTrackExtractor
+    4. Fill gaps with transitions
+    5. Subdivide sections into phrases
+    6. Optionally run interactive category review (if TTY and interactive=True)
+    7. Optionally detect MIDI events and merge into phrases
+    8. Optionally transcribe lyrics from vocal audio (if transcribe=True)
+    9. Optionally parse and distribute lyrics (with optional forced alignment)
+    10. Format output as markdown phrase table
 
     Args:
         als_path: Path to the .als file
@@ -114,6 +117,7 @@ def analyze_als_v2(
         save_lyrics_path: If provided, save lyrics to this path (LRC format with timestamps)
         language: Language code for transcription/alignment (default: "en")
         model_size: Whisper model size (default: "base")
+        interactive: If True and TTY available, prompt for category review
 
     Returns:
         Markdown formatted phrase table string
@@ -122,8 +126,16 @@ def analyze_als_v2(
         ParseError: If the file cannot be parsed
         TrackNotFoundError: If the structure track is not found
     """
+    import sys
+
+    from .config import load_config
+
     live_set = parse_als_file(als_path)
     bpm = live_set.tempo.bpm
+
+    # Load existing config
+    config = load_config(als_path)
+    category_overrides = config.category_overrides if config else {}
 
     extractor = StructureTrackExtractor(structure_track)
     sections = extractor.extract(live_set)
@@ -131,8 +143,34 @@ def analyze_als_v2(
 
     phrases = subdivide_sections(sections, beats_per_phrase)
 
+    # Interactive category review (if TTY available and enabled)
+    if show_events and interactive and sys.stdin.isatty():
+        from .category_review import prompt_category_review
+        from .events import categorize_all_tracks, get_available_categories
+
+        track_names = get_all_track_names(als_path)
+        current_categories = categorize_all_tracks(track_names, category_overrides)
+        available_categories = get_available_categories()
+
+        new_overrides = prompt_category_review(
+            track_names, current_categories, available_categories
+        )
+
+        if new_overrides:
+            # Merge new overrides with existing
+            category_overrides = {**category_overrides, **new_overrides}
+
+            # Save to config
+            from .config import MuseConfig, save_config
+
+            updated_config = MuseConfig(
+                vocal_tracks=config.vocal_tracks if config else [],
+                category_overrides=category_overrides,
+            )
+            save_config(als_path, updated_config)
+
     if show_events:
-        events = detect_track_events_from_als_phrase_aligned(als_path, phrases)
+        events = detect_track_events_from_als_phrase_aligned(als_path, phrases, category_overrides)
         phrases = merge_events_into_phrases(phrases, events)
 
     # Handle transcription mode (ASR from vocal audio)
@@ -203,6 +241,7 @@ def analyze_als_v2(
 def detect_track_events_from_als_phrase_aligned(
     als_path: Path,
     phrases: list[Phrase],
+    category_overrides: dict[str, str] | None = None,
 ) -> list[TrackEvent]:
     """Detect track events using phrase-aligned boundaries.
 
@@ -214,6 +253,8 @@ def detect_track_events_from_als_phrase_aligned(
     Args:
         als_path: Path to the .als file
         phrases: List of Phrase objects defining the time boundaries.
+        category_overrides: Optional mapping of track names to categories.
+            If provided, these override auto-categorization.
 
     Returns:
         List of TrackEvent objects for all tracks.
@@ -238,7 +279,9 @@ def detect_track_events_from_als_phrase_aligned(
         if not clip_contents:
             continue
 
-        events = detect_events_from_clip_contents_phrase_aligned(track_name, clip_contents, phrases)
+        events = detect_events_from_clip_contents_phrase_aligned(
+            track_name, clip_contents, phrases, category_overrides
+        )
         all_events.extend(events)
 
     return all_events
@@ -277,6 +320,26 @@ def extract_track_clip_contents(als_path: Path) -> dict[str, list[MidiClipConten
             result[track_name] = clip_contents
 
     return result
+
+
+def get_all_track_names(als_path: Path) -> list[str]:
+    """Get all track names from an ALS file.
+
+    Args:
+        als_path: Path to the .als file
+
+    Returns:
+        List of track names (both MIDI and audio tracks).
+    """
+    root = parse_als_xml(als_path)
+    track_elements = get_track_elements(root)
+
+    names: list[str] = []
+    for track_elem, _ in track_elements:
+        name = extract_track_name(track_elem)
+        names.append(name)
+
+    return names
 
 
 def align_and_distribute_lyrics(
@@ -326,7 +389,7 @@ def align_and_distribute_lyrics(
     from .audio import (
         combine_clips_to_audio,
         extract_audio_clips,
-        select_vocal_tracks,
+        select_vocal_tracks_with_config,
     )
     from .lyrics import format_timed_lines_as_lrc
     from .lyrics_align import align_lyrics, words_to_lines
@@ -340,9 +403,10 @@ def align_and_distribute_lyrics(
     if not all_clips:
         raise AlignmentError("No audio clips found in ALS file")
 
-    # Step 2: Select vocal tracks
-    selected_clips = select_vocal_tracks(
+    # Step 2: Select vocal tracks (with config integration)
+    selected_clips, _ = select_vocal_tracks_with_config(
         all_clips,
+        als_path,
         explicit_tracks=vocal_tracks,
         use_all=use_all_vocals,
     )
@@ -456,7 +520,7 @@ def transcribe_and_distribute_lyrics(
     from .audio import (
         combine_clips_to_audio,
         extract_audio_clips,
-        select_vocal_tracks,
+        select_vocal_tracks_with_config,
     )
     from .lyrics import distribute_timed_lyrics, format_segments_as_lrc
     from .lyrics_align import segments_to_lines, transcribe_lyrics
@@ -470,9 +534,10 @@ def transcribe_and_distribute_lyrics(
     if not all_clips:
         raise AlignmentError("No audio clips found in ALS file")
 
-    # Step 2: Select vocal tracks
-    selected_clips = select_vocal_tracks(
+    # Step 2: Select vocal tracks (with config integration)
+    selected_clips, _ = select_vocal_tracks_with_config(
         all_clips,
+        als_path,
         explicit_tracks=vocal_tracks,
         use_all=use_all_vocals,
     )

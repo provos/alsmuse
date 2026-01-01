@@ -53,6 +53,7 @@ CLI (cli.py) → Application (analyze.py) → Parser + Extractors + Formatter
 - Python 3.12+
 - Ruff for linting (line length 100)
 - Ruff lint rules: E, F, I, UP, B, SIM
+- **no inline imports**: all python modules are imported at the top of the module
 
 ## Research
 

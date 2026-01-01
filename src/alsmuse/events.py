@@ -405,6 +405,7 @@ def detect_events_from_clip_contents_phrase_aligned(
     track_name: str,
     clip_contents: list[MidiClipContent],
     phrases: list[Phrase],
+    category_overrides: dict[str, str] | None = None,
 ) -> list[TrackEvent]:
     """Detect track events using phrase-aligned boundaries.
 
@@ -415,6 +416,9 @@ def detect_events_from_clip_contents_phrase_aligned(
         track_name: Name of the track.
         clip_contents: List of MidiClipContent for the track.
         phrases: List of Phrase objects defining the time boundaries.
+        category_overrides: Optional mapping of track names to categories.
+            If provided and track_name is in the mapping, uses the override
+            instead of auto-categorization.
 
     Returns:
         List of TrackEvent objects for state changes.
@@ -422,12 +426,55 @@ def detect_events_from_clip_contents_phrase_aligned(
     if not clip_contents or not phrases:
         return []
 
-    category = categorize_track(track_name)
+    # Check for category override first
+    if category_overrides and track_name in category_overrides:
+        category = category_overrides[track_name]
+    else:
+        category = categorize_track(track_name)
+
     if category == "other":
         return []
 
     phrase_activity = detect_phrase_activity(phrases, clip_contents)
     return detect_events_from_phrase_activity(track_name, phrase_activity, category)
+
+
+def categorize_all_tracks(
+    track_names: list[str],
+    category_overrides: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Categorize all tracks and return a mapping of track names to categories.
+
+    This function is useful for displaying all track categorizations to the user
+    for interactive review.
+
+    Args:
+        track_names: List of all track names to categorize.
+        category_overrides: Optional mapping of track names to categories.
+            If provided and a track name is in the mapping, uses the override
+            instead of auto-categorization.
+
+    Returns:
+        Dictionary mapping track names to their categories.
+    """
+    result: dict[str, str] = {}
+
+    for track_name in track_names:
+        if category_overrides and track_name in category_overrides:
+            result[track_name] = category_overrides[track_name]
+        else:
+            result[track_name] = categorize_track(track_name)
+
+    return result
+
+
+def get_available_categories() -> list[str]:
+    """Get list of available track categories.
+
+    Returns:
+        List of category names including 'other'.
+    """
+    return list(TRACK_CATEGORIES.keys()) + ["other"]
 
 
 def merge_events_into_phrases(

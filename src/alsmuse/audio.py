@@ -10,6 +10,7 @@ interactive track selection for the lyrics alignment feature.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 from pathlib import Path
@@ -235,16 +236,12 @@ def _parse_audio_clip_element(
         loop_end_elem = loop_elem.find("LoopEnd")
 
         if loop_start_elem is not None:
-            try:
+            with contextlib.suppress(ValueError):
                 sample_start_beats = float(loop_start_elem.get("Value", "0"))
-            except ValueError:
-                pass
 
         if loop_end_elem is not None:
-            try:
+            with contextlib.suppress(ValueError):
                 sample_end_beats = float(loop_end_elem.get("Value", "0"))
-            except ValueError:
-                pass
 
     # Convert beats to seconds
     start_seconds = beats_to_seconds(start_beats, bpm)
@@ -584,10 +581,7 @@ def split_audio_on_silence(
     audio, sample_rate = sf.read(str(audio_path), dtype="float32")
 
     # Convert to mono for silence detection
-    if audio.ndim > 1:
-        mono = audio.mean(axis=1)
-    else:
-        mono = audio
+    mono = audio.mean(axis=1) if audio.ndim > 1 else audio
 
     # Convert threshold from dB to linear amplitude
     silence_threshold = 10 ** (silence_threshold_db / 20)
@@ -719,7 +713,7 @@ def prompt_track_selection(
 
     # Multiple tracks: interactive selection
     selected = questionary.checkbox(
-        "Select vocal tracks to include:",
+        "Select vocal tracks to include for lyrics alignment:",
         choices=[
             questionary.Choice(name, checked=True)  # Pre-select all
             for name in track_names
@@ -738,31 +732,42 @@ def select_vocal_tracks(
     all_clips: list[AudioClipRef],
     explicit_tracks: tuple[str, ...] | None,
     use_all: bool,
+    config_tracks: list[str] | None = None,
 ) -> list[AudioClipRef]:
     """Select vocal tracks for alignment.
 
-    Handles three modes:
+    Handles four modes (in priority order):
     1. Explicit tracks specified via CLI options
-    2. use_all=True: Use all detected vocal tracks without prompting
-    3. Interactive: Prompt user when multiple tracks found (if TTY available)
+    2. Tracks from config file (if config_tracks provided)
+    3. use_all=True: Use all detected vocal tracks without prompting
+    4. Interactive: Prompt user when multiple tracks found (if TTY available)
 
     Args:
         all_clips: All audio clips from ALS.
         explicit_tracks: Tracks specified via --vocal-track options.
         use_all: If True, use all detected vocal tracks without prompting.
+        config_tracks: Tracks from .muse config file.
 
     Returns:
         Filtered list of clips from selected tracks, sorted by start time.
     """
     import click
 
-    # Explicit selection via CLI
+    # Explicit selection via CLI (highest priority)
     if explicit_tracks:
         explicit_lower = {t.lower() for t in explicit_tracks}
         return sorted(
             [c for c in all_clips if c.track_name.lower() in explicit_lower],
             key=lambda c: c.start_beats,
         )
+
+    # Config file selection (second priority)
+    if config_tracks:
+        config_lower = {t.lower() for t in config_tracks}
+        matching_clips = [c for c in all_clips if c.track_name.lower() in config_lower]
+        if matching_clips:
+            return sorted(matching_clips, key=lambda c: c.start_beats)
+        # Config tracks not found, fall through to auto-detection
 
     # Find all potential vocal tracks
     vocal_clips = [c for c in all_clips if is_vocal_track(c.track_name)]
@@ -795,6 +800,53 @@ def select_vocal_tracks(
         err=True,
     )
     return sorted(vocal_clips, key=lambda c: c.start_beats)
+
+
+def select_vocal_tracks_with_config(
+    all_clips: list[AudioClipRef],
+    als_path: Path,
+    explicit_tracks: tuple[str, ...] | None,
+    use_all: bool,
+) -> tuple[list[AudioClipRef], list[str]]:
+    """Select vocal tracks with config file integration.
+
+    This is the main entry point for vocal track selection. It:
+    1. Loads config from .muse file if it exists
+    2. Selects tracks using the priority order in select_vocal_tracks
+    3. If interactive selection occurred, saves the selection to config
+
+    Args:
+        all_clips: All audio clips from ALS.
+        als_path: Path to the ALS file (for config file).
+        explicit_tracks: Tracks specified via --vocal-track options.
+        use_all: If True, use all detected vocal tracks without prompting.
+
+    Returns:
+        Tuple of (selected clips, selected track names).
+    """
+    from .config import MuseConfig, load_config, save_config
+
+    # Load existing config
+    config = load_config(als_path)
+    config_tracks = config.vocal_tracks if config else None
+
+    # Get initial selection
+    selected_clips = select_vocal_tracks(all_clips, explicit_tracks, use_all, config_tracks)
+
+    # Get unique track names from selected clips
+    selected_names = get_unique_vocal_track_names(selected_clips)
+
+    # If we did interactive selection (no explicit, no config, multiple tracks)
+    # save the selection to config
+    if not explicit_tracks and not config_tracks and sys.stdin.isatty() and selected_names:
+        # Update or create config with vocal tracks
+        if config:
+            config.vocal_tracks = selected_names
+        else:
+            config = MuseConfig(vocal_tracks=selected_names)
+        save_config(als_path, config)
+
+    return selected_clips, selected_names
 
 
 # ---------------------------------------------------------------------------

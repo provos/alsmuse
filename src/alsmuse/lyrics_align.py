@@ -563,7 +563,7 @@ def transcribe_lyrics(
 
         # Transcribe each segment separately
         all_segments: list[TimedSegment] = []
-        for seg_path, start_time, end_time in audio_segments:
+        for seg_path, start_time, _end_time in audio_segments:
             # Transcribe this segment with time offset
             seg_result = _transcribe_single_segment(
                 seg_path, language, model_size, time_offset=start_time

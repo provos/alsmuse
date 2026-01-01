@@ -42,13 +42,9 @@ pip install -e .
 
 ### With Lyrics Alignment
 
-For lyrics alignment and transcription features, install with optional dependencies:
+For faster lyrics transcription on Apple silicon, install with optional dependencies:
 
 ```bash
-# Cross-platform (uses stable-ts, slower on CPU)
-uv sync --extra align
-# or: pip install -e ".[align]"
-
 # Apple Silicon Macs (uses mlx-whisper, much faster)
 uv sync --extra align-mlx
 # or: pip install -e ".[align-mlx]"
@@ -143,6 +139,14 @@ STRUCTURE track:
 ```
 
 Each clip's name becomes the section name in the output.
+
+### Track Categorization
+
+ALSmuse uses semantic matching to categorize tracks by their names. Track names are compared against categories like Drums, Bass, Vocals, Lead, Guitar, Keys, Pad, and FX to determine what type of instrument each track represents.
+
+When a track enters or exits, the event is labeled by category (e.g., "Bass enters") rather than the specific track name. This keeps the A/V table clean and focused on musical changes rather than implementation details.
+
+Tracks that don't clearly match any category (generic names like "Track 1" or "Audio 2", or ambiguous names) are excluded from event detection. If you don't use descriptive names, the category mapping will likely fail.
 
 ## CLI Reference
 
