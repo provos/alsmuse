@@ -844,7 +844,8 @@ class TestCLIOptions:
         result = runner.invoke(analyze, ["--help"])
 
         assert "--save-lyrics" in result.output
-        assert "transcribed lyrics" in result.output.lower()
+        assert "save lyrics" in result.output.lower()
+        assert "lrc format" in result.output.lower()
 
     def test_cli_accepts_output_option(self) -> None:
         """CLI accepts --output / -o option."""

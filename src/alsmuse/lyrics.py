@@ -32,7 +32,7 @@ import logging
 import re
 from pathlib import Path
 
-from .models import LyricsFormat, Phrase, TimedLine, TimedWord
+from .models import LyricsFormat, Phrase, TimedLine, TimedSegment, TimedWord
 
 logger = logging.getLogger(__name__)
 
@@ -381,7 +381,14 @@ def parse_enhanced_lrc(content: str) -> list[TimedLine]:
     return result
 
 
-def format_segments_as_lrc(segments: list["TimedSegment"]) -> str:
+def _format_timestamp_lrc(seconds: float) -> str:
+    """Format seconds as LRC timestamp [mm:ss.xx]."""
+    minutes = int(seconds // 60)
+    secs = seconds % 60
+    return f"[{minutes:02d}:{secs:05.2f}]"
+
+
+def format_segments_as_lrc(segments: list[TimedSegment]) -> str:
     """Format transcribed segments as LRC lyrics.
 
     Converts TimedSegment objects to LRC format with timestamps,
@@ -407,16 +414,38 @@ def format_segments_as_lrc(segments: list["TimedSegment"]) -> str:
         >>> print(format_segments_as_lrc(segments))
         [00:01.50]Hello world
     """
-    from .models import TimedSegment  # Import here to avoid circular import
-
     lines: list[str] = []
     for segment in segments:
-        # Format timestamp as [mm:ss.xx]
-        total_seconds = segment.start
-        minutes = int(total_seconds // 60)
-        seconds = total_seconds % 60
-        timestamp = f"[{minutes:02d}:{seconds:05.2f}]"
+        timestamp = _format_timestamp_lrc(segment.start)
         lines.append(f"{timestamp}{segment.text}")
+
+    return "\n".join(lines)
+
+
+def format_timed_lines_as_lrc(timed_lines: list[TimedLine]) -> str:
+    """Format aligned lyrics as LRC.
+
+    Converts TimedLine objects to LRC format with timestamps,
+    allowing aligned lyrics to be saved and reloaded without
+    re-aligning.
+
+    Args:
+        timed_lines: List of TimedLine objects from alignment.
+
+    Returns:
+        LRC-formatted string with timestamps.
+
+    Example:
+        >>> lines = [
+        ...     TimedLine(text="Hello world", start=1.5, end=3.0, words=()),
+        ... ]
+        >>> print(format_timed_lines_as_lrc(lines))
+        [00:01.50]Hello world
+    """
+    lines: list[str] = []
+    for timed_line in timed_lines:
+        timestamp = _format_timestamp_lrc(timed_line.start)
+        lines.append(f"{timestamp}{timed_line.text}")
 
     return "\n".join(lines)
 

@@ -111,7 +111,7 @@ def analyze_als_v2(
         use_all_vocals: If True, use all detected vocal tracks without prompting
         save_vocals_path: If provided, save combined vocals to this path for validation
         transcribe: If True, transcribe lyrics from vocal audio using ASR
-        save_lyrics_path: If provided, save transcribed lyrics to this path
+        save_lyrics_path: If provided, save lyrics to this path (LRC format with timestamps)
         language: Language code for transcription/alignment (default: "en")
         model_size: Whisper model size (default: "base")
 
@@ -175,6 +175,7 @@ def analyze_als_v2(
                     vocal_tracks=vocal_tracks,
                     use_all_vocals=use_all_vocals,
                     save_vocals_path=save_vocals_path,
+                    save_lyrics_path=save_lyrics_path,
                 )
                 show_lyrics = True
             except AlignmentError as e:
@@ -288,6 +289,7 @@ def align_and_distribute_lyrics(
     vocal_tracks: tuple[str, ...] | None = None,
     use_all_vocals: bool = False,
     save_vocals_path: Path | None = None,
+    save_lyrics_path: Path | None = None,
 ) -> list[Phrase]:
     """Full alignment pipeline: extract audio, align lyrics, distribute to phrases.
 
@@ -299,7 +301,8 @@ def align_and_distribute_lyrics(
     2. Select vocal tracks (using explicit selection, auto-detection, or prompting)
     3. Combine vocal clips to a single audio file
     4. Run forced alignment with stable-ts
-    5. Distribute timed lyrics to phrases
+    5. Save aligned lyrics if requested
+    6. Distribute timed lyrics to phrases
 
     Args:
         als_path: Path to the .als file
@@ -309,6 +312,7 @@ def align_and_distribute_lyrics(
         vocal_tracks: Specific vocal track names to use (None for auto-detect)
         use_all_vocals: If True, use all detected vocal tracks without prompting
         save_vocals_path: If provided, save combined vocals to this path for validation
+        save_lyrics_path: If provided, save aligned lyrics in LRC format
 
     Returns:
         Phrases with lyric fields populated from forced alignment.
@@ -322,6 +326,7 @@ def align_and_distribute_lyrics(
         extract_audio_clips,
         select_vocal_tracks,
     )
+    from .lyrics import format_timed_lines_as_lrc
     from .lyrics_align import align_lyrics, words_to_lines
 
     # Step 1: Extract all audio clips from ALS
@@ -387,6 +392,15 @@ def align_and_distribute_lyrics(
             if line.strip()
         ]
         timed_lines = words_to_lines(timed_words, original_lines)
+
+        # Step 6: Save aligned lyrics if requested (in LRC format)
+        if save_lyrics_path is not None:
+            try:
+                lrc_content = format_timed_lines_as_lrc(timed_lines)
+                save_lyrics_path.write_text(lrc_content, encoding="utf-8")
+                logger.info("Saved aligned lyrics to: %s", save_lyrics_path)
+            except OSError as e:
+                logger.warning("Failed to save lyrics: %s", e)
 
         return distribute_timed_lyrics(phrases, timed_lines, bpm)
 

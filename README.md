@@ -26,6 +26,7 @@ ALSmuse analyzes Ableton Live Set (.als) files to extract musical structure, tra
   - Simple timed format (`0:12.34 Lyric line`)
   - ASR transcription from vocal audio
 - **Forced Alignment**: Aligns plain text lyrics to audio using Whisper for precise timing
+- **LRC Export**: Save aligned or transcribed lyrics in LRC format for reuse
 
 ## Installation
 
@@ -74,11 +75,14 @@ alsmuse analyze song.als --no-events
 ### With Lyrics
 
 ```bash
-# Plain text lyrics with section headers
+# Plain text lyrics with section headers (uses forced alignment)
 alsmuse analyze song.als --lyrics lyrics.txt
 
 # Timestamped lyrics (LRC format) - no alignment needed
 alsmuse analyze song.als --lyrics song.lrc
+
+# Save aligned lyrics with timestamps for reuse
+alsmuse analyze song.als --lyrics lyrics.txt --save-lyrics aligned.lrc
 ```
 
 **Plain text lyrics format:**
@@ -159,7 +163,7 @@ Options:
   --language TEXT                 Language code (default: en)
   --whisper-model [tiny|base|small|medium|large]
                                   Whisper model size (default: base)
-  --save-lyrics PATH              Save transcribed lyrics to file
+  --save-lyrics PATH              Save lyrics to file (LRC format with timestamps)
   -o, --output PATH               Save A/V table to file
   --help                          Show this message and exit
 ```
