@@ -1,7 +1,12 @@
 """Command-line interface for ALSmuse."""
 
+import os
 import sys
 from pathlib import Path
+
+# Prevent tokenizers parallelism warning when forking for Whisper alignment
+# Must be set before importing anything that uses tokenizers (model2vec, transformers, etc.)
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 import click
 
@@ -147,8 +152,7 @@ def analyze(
     # Validate mutual exclusion: --transcribe and --lyrics cannot be used together
     if transcribe and lyrics is not None:
         click.echo(
-            "Error: --transcribe and --lyrics are mutually exclusive. "
-            "Use one or the other.",
+            "Error: --transcribe and --lyrics are mutually exclusive. Use one or the other.",
             err=True,
         )
         sys.exit(1)

@@ -359,12 +359,7 @@ class TestDetectLyricsFormat:
     def test_detect_mixed_formats_prefers_lrc(self) -> None:
         """When LRC timestamps appear, format is detected as LRC even with other patterns."""
         # This file has both LRC timestamps and some plain text lines
-        content = (
-            "[ar:Artist]\n"
-            "[00:12.34]First line\n"
-            "Some plain text\n"
-            "[00:15.67]Second line\n"
-        )
+        content = "[ar:Artist]\n[00:12.34]First line\nSome plain text\n[00:15.67]Second line\n"
         assert detect_lyrics_format(content) == LyricsFormat.LRC
 
 
@@ -393,12 +388,7 @@ class TestParseLrcLyrics:
 
     def test_parse_lrc_ignores_metadata(self) -> None:
         """Metadata tags are ignored."""
-        content = (
-            "[ar:Artist Name]\n"
-            "[ti:Song Title]\n"
-            "[al:Album Name]\n"
-            "[00:12.34]First line\n"
-        )
+        content = "[ar:Artist Name]\n[ti:Song Title]\n[al:Album Name]\n[00:12.34]First line\n"
         result = parse_lrc_lyrics(content)
 
         assert len(result) == 1
@@ -594,8 +584,7 @@ class TestParseEnhancedLrc:
     def test_parse_enhanced_lrc_sorted_by_time(self) -> None:
         """Results are sorted by timestamp."""
         content = (
-            "[00:30.00]<00:30.00>Later <00:30.50>line\n"
-            "[00:12.00]<00:12.00>Earlier <00:12.50>line\n"
+            "[00:30.00]<00:30.00>Later <00:30.50>line\n[00:12.00]<00:12.00>Earlier <00:12.50>line\n"
         )
         result = parse_enhanced_lrc(content)
 
@@ -672,10 +661,7 @@ class TestParseLyricsFileAuto:
         """LRC with metadata is parsed correctly."""
         lyrics_file = tmp_path / "lyrics.lrc"
         lyrics_file.write_text(
-            "[ar:Artist Name]\n"
-            "[ti:Song Title]\n"
-            "[00:12.34]First line\n"
-            "[00:15.67]Second line\n"
+            "[ar:Artist Name]\n[ti:Song Title]\n[00:12.34]First line\n[00:15.67]Second line\n"
         )
 
         timed, sections = parse_lyrics_file_auto(lyrics_file)

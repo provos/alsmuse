@@ -32,22 +32,55 @@ logger = logging.getLogger(__name__)
 # Keywords should be lowercase - matching is case-insensitive
 TRACK_CATEGORIES: dict[str, list[str]] = {
     "drums": [
-        "kick", "snare", "drum", "hi-hat", "hat", "cymbal", "percussion", "perc", "tom",
-        "clap", "shaker",
+        "kick",
+        "snare",
+        "drum",
+        "hi-hat",
+        "hat",
+        "cymbal",
+        "percussion",
+        "perc",
+        "tom",
+        "clap",
+        "shaker",
     ],
     "bass": ["bass", "sub bass", "sub", "low end", "808"],
     "vocals": [
-        "vocal", "vocals", "vox", "voice", "singing", "lead vocal", "backing vocal",
-        "verse", "chorus", "main", "double", "harmony",
+        "vocal",
+        "vocals",
+        "vox",
+        "voice",
+        "singing",
+        "lead vocal",
+        "backing vocal",
+        "verse",
+        "chorus",
+        "main",
+        "double",
+        "harmony",
     ],
     "lead": ["lead", "solo", "melody", "top line"],
     "guitar": ["guitar", "acoustic guitar", "electric guitar", "gtr"],
     "keys": [
-        "piano", "keys", "keyboard", "organ", "synth", "synthesizer", "rhodes", "wurlitzer",
+        "piano",
+        "keys",
+        "keyboard",
+        "organ",
+        "synth",
+        "synthesizer",
+        "rhodes",
+        "wurlitzer",
     ],
     "pad": ["pad", "strings", "atmosphere", "ambient", "texture"],
     "fx": [
-        "fx", "effects", "riser", "downlifter", "reverse", "sweep", "impact", "transition",
+        "fx",
+        "effects",
+        "riser",
+        "downlifter",
+        "reverse",
+        "sweep",
+        "impact",
+        "transition",
     ],
 }
 
@@ -157,8 +190,10 @@ def categorize_track_embedding(
 
     if debug or os.environ.get("ALSMUSE_DEBUG_CATEGORIZE"):
         scores_str = ", ".join(f"{cat}={sim:.3f}" for cat, sim in all_scores)
-        print(f"[categorize] '{track_name}' -> {best_category} "
-              f"(score={best_similarity:.3f}, margin={margin:.3f})")
+        print(
+            f"[categorize] '{track_name}' -> {best_category} "
+            f"(score={best_similarity:.3f}, margin={margin:.3f})"
+        )
         print(f"             scores: {scores_str}")
 
     return (best_category, best_similarity, margin)
@@ -201,17 +236,23 @@ def categorize_track(track_name: str, debug: bool = False) -> str:
     # Check both threshold and margin
     if similarity >= EMBEDDING_SIMILARITY_THRESHOLD and margin >= EMBEDDING_MARGIN_THRESHOLD:
         if debug:
-            print(f"[categorize] '{track_name}' -> {category} "
-                  f"(score={similarity:.3f}, margin={margin:.3f})")
+            print(
+                f"[categorize] '{track_name}' -> {category} "
+                f"(score={similarity:.3f}, margin={margin:.3f})"
+            )
         return category
 
     if debug:
         if similarity < EMBEDDING_SIMILARITY_THRESHOLD:
-            print(f"[categorize] '{track_name}' -> other (below threshold: "
-                  f"{similarity:.3f} < {EMBEDDING_SIMILARITY_THRESHOLD})")
+            print(
+                f"[categorize] '{track_name}' -> other (below threshold: "
+                f"{similarity:.3f} < {EMBEDDING_SIMILARITY_THRESHOLD})"
+            )
         else:
-            print(f"[categorize] '{track_name}' -> other (margin too small: "
-                  f"{margin:.3f} < {EMBEDDING_MARGIN_THRESHOLD})")
+            print(
+                f"[categorize] '{track_name}' -> other (margin too small: "
+                f"{margin:.3f} < {EMBEDDING_MARGIN_THRESHOLD})"
+            )
 
     return "other"
 
@@ -306,9 +347,7 @@ def detect_phrase_activity(
     """
     result: list[tuple[Phrase, bool]] = []
     for phrase in phrases:
-        is_active = check_activity_in_range(
-            clip_contents, phrase.start_beats, phrase.end_beats
-        )
+        is_active = check_activity_in_range(clip_contents, phrase.start_beats, phrase.end_beats)
         result.append((phrase, is_active))
     return result
 

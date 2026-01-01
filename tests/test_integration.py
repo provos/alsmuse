@@ -231,8 +231,7 @@ class TestAnalyzeAlsV2:
         # CHORUS (32 beats) should produce 4 phrases
         lines = result.strip().split("\n")
         data_rows = [
-            row for row in lines
-            if row.startswith("|") and "Time" not in row and "---" not in row
+            row for row in lines if row.startswith("|") and "Time" not in row and "---" not in row
         ]
         assert len(data_rows) == 10  # 2 + 4 + 4
 
@@ -780,9 +779,7 @@ class TestCLIOptions:
         als_file = create_als_file(tmp_path, MINIMAL_ALS_XML)
 
         # Try to use --align-vocals without --lyrics
-        result = runner.invoke(
-            main, ["analyze", str(als_file), "--align-vocals"]
-        )
+        result = runner.invoke(main, ["analyze", str(als_file), "--align-vocals"])
 
         assert result.exit_code != 0
         assert "--align-vocals requires --lyrics" in result.output
@@ -872,9 +869,7 @@ class TestCLIOptions:
         output_file = tmp_path / "av_table.md"
 
         # Run with --output option
-        result = runner.invoke(
-            main, ["analyze", str(als_file), "--output", str(output_file)]
-        )
+        result = runner.invoke(main, ["analyze", str(als_file), "--output", str(output_file)])
 
         assert result.exit_code == 0
         assert output_file.exists()
@@ -914,10 +909,7 @@ class TestTimestampedLyricsBypassAlignment:
 
         # Create LRC lyrics file with timestamps
         lyrics_file = tmp_path / "lyrics.lrc"
-        lyrics_file.write_text(
-            "[00:08.00]First verse line\n"
-            "[00:12.00]Second verse line\n"
-        )
+        lyrics_file.write_text("[00:08.00]First verse line\n[00:12.00]Second verse line\n")
 
         # With align_vocals=True but timestamped lyrics, alignment is bypassed
         # This would fail if alignment were attempted (no audio tracks)
@@ -945,10 +937,7 @@ class TestTimestampedLyricsBypassAlignment:
 
         # Create simple timed lyrics file
         lyrics_file = tmp_path / "lyrics.txt"
-        lyrics_file.write_text(
-            "0:08.00 First verse line\n"
-            "0:12.00 Second verse line\n"
-        )
+        lyrics_file.write_text("0:08.00 First verse line\n0:12.00 Second verse line\n")
 
         # With align_vocals=True but timestamped lyrics, alignment is bypassed
         result = analyze_als_v2(
@@ -991,9 +980,7 @@ class TestTimestampedLyricsBypassAlignment:
         assert "First verse line" in result
         assert "Second verse line" in result
 
-    def test_plain_text_lyrics_with_align_triggers_alignment(
-        self, tmp_path: Path
-    ) -> None:
+    def test_plain_text_lyrics_with_align_triggers_alignment(self, tmp_path: Path) -> None:
         """Plain text lyrics with align_vocals=True attempts alignment.
 
         Since MINIMAL_ALS_XML has no audio tracks, alignment fails and
@@ -1043,11 +1030,13 @@ class TestLanguageAndModelPassing:
         captured_calls: list[dict] = []
 
         def mock_transcribe(audio_path, language, model_size, time_offset):
-            captured_calls.append({
-                "language": language,
-                "model_size": model_size,
-                "time_offset": time_offset,
-            })
+            captured_calls.append(
+                {
+                    "language": language,
+                    "model_size": model_size,
+                    "time_offset": time_offset,
+                }
+            )
             return [expected_segment]
 
         with (
@@ -1089,11 +1078,13 @@ class TestLanguageAndModelPassing:
         captured_calls: list[dict] = []
 
         def mock_transcribe(audio_path, language, model_size, time_offset):
-            captured_calls.append({
-                "language": language,
-                "model_size": model_size,
-                "time_offset": time_offset,
-            })
+            captured_calls.append(
+                {
+                    "language": language,
+                    "model_size": model_size,
+                    "time_offset": time_offset,
+                }
+            )
             return [expected_segment]
 
         with (

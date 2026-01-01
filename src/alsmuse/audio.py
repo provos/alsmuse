@@ -127,9 +127,7 @@ def extract_audio_clips(
             continue
 
         track_name = extract_track_name(track_elem)
-        track_clips = _extract_audio_clips_from_track(
-            track_elem, track_name, als_path, bpm
-        )
+        track_clips = _extract_audio_clips_from_track(track_elem, track_name, als_path, bpm)
         clips.extend(track_clips)
 
     return clips
@@ -338,9 +336,7 @@ def find_vocal_clips(
     """
     if explicit_tracks:
         explicit_lower = {t.lower() for t in explicit_tracks}
-        matching_clips = [
-            c for c in clips if c.track_name.lower() in explicit_lower
-        ]
+        matching_clips = [c for c in clips if c.track_name.lower() in explicit_lower]
     else:
         matching_clips = [c for c in clips if is_vocal_track(c.track_name)]
 
@@ -609,7 +605,7 @@ def split_audio_on_silence(
     for i in range(num_windows):
         start = i * hop_size
         window = padded[start : start + window_size]
-        rms[i] = np.sqrt(np.mean(window ** 2))
+        rms[i] = np.sqrt(np.mean(window**2))
 
     # Find silent regions (RMS below threshold)
     is_silent = rms < silence_threshold
@@ -848,8 +844,6 @@ def check_alignment_dependencies() -> list[str]:
     try:
         import soundfile  # type: ignore[import-not-found,import-untyped]  # noqa: F401
     except ImportError:
-        errors.append(
-            "soundfile not installed. Run: pip install 'alsmuse[align]'"
-        )
+        errors.append("soundfile not installed. Run: pip install 'alsmuse[align]'")
 
     return errors

@@ -287,16 +287,18 @@ class TestExtractAudioClips:
 
         # Create ALS file with one audio clip
         als_path = tmp_path / "song.als"
-        als_content = create_minimal_als_xml([
-            {
-                "track_name": "Lead Vocal",
-                "clip_name": "Verse",
-                "start_beats": "64",
-                "end_beats": "128",
-                "relative_path": "Samples/vocals.wav",
-                "absolute_path": "/old/path/vocals.wav",
-            }
-        ])
+        als_content = create_minimal_als_xml(
+            [
+                {
+                    "track_name": "Lead Vocal",
+                    "clip_name": "Verse",
+                    "start_beats": "64",
+                    "end_beats": "128",
+                    "relative_path": "Samples/vocals.wav",
+                    "absolute_path": "/old/path/vocals.wav",
+                }
+            ]
+        )
         als_path.write_bytes(als_content)
 
         clips = extract_audio_clips(als_path, bpm=120.0)
@@ -322,24 +324,26 @@ class TestExtractAudioClips:
         chorus_file.write_bytes(b"chorus audio")
 
         als_path = tmp_path / "song.als"
-        als_content = create_minimal_als_xml([
-            {
-                "track_name": "Vocals",
-                "clip_name": "Verse",
-                "start_beats": "0",
-                "end_beats": "64",
-                "relative_path": "Samples/verse.wav",
-                "absolute_path": "",
-            },
-            {
-                "track_name": "Vocals",
-                "clip_name": "Chorus",
-                "start_beats": "64",
-                "end_beats": "128",
-                "relative_path": "Samples/chorus.wav",
-                "absolute_path": "",
-            },
-        ])
+        als_content = create_minimal_als_xml(
+            [
+                {
+                    "track_name": "Vocals",
+                    "clip_name": "Verse",
+                    "start_beats": "0",
+                    "end_beats": "64",
+                    "relative_path": "Samples/verse.wav",
+                    "absolute_path": "",
+                },
+                {
+                    "track_name": "Vocals",
+                    "clip_name": "Chorus",
+                    "start_beats": "64",
+                    "end_beats": "128",
+                    "relative_path": "Samples/chorus.wav",
+                    "absolute_path": "",
+                },
+            ]
+        )
         als_path.write_bytes(als_content)
 
         clips = extract_audio_clips(als_path, bpm=120.0)
@@ -361,24 +365,26 @@ class TestExtractAudioClips:
         backing_file.write_bytes(b"backing audio")
 
         als_path = tmp_path / "song.als"
-        als_content = create_minimal_als_xml([
-            {
-                "track_name": "Lead Vocal",
-                "clip_name": "Lead",
-                "start_beats": "0",
-                "end_beats": "64",
-                "relative_path": "Samples/lead.wav",
-                "absolute_path": "",
-            },
-            {
-                "track_name": "Backing Vocal",
-                "clip_name": "Backing",
-                "start_beats": "32",
-                "end_beats": "96",
-                "relative_path": "Samples/backing.wav",
-                "absolute_path": "",
-            },
-        ])
+        als_content = create_minimal_als_xml(
+            [
+                {
+                    "track_name": "Lead Vocal",
+                    "clip_name": "Lead",
+                    "start_beats": "0",
+                    "end_beats": "64",
+                    "relative_path": "Samples/lead.wav",
+                    "absolute_path": "",
+                },
+                {
+                    "track_name": "Backing Vocal",
+                    "clip_name": "Backing",
+                    "start_beats": "32",
+                    "end_beats": "96",
+                    "relative_path": "Samples/backing.wav",
+                    "absolute_path": "",
+                },
+            ]
+        )
         als_path.write_bytes(als_content)
 
         clips = extract_audio_clips(als_path, bpm=120.0)
@@ -396,24 +402,26 @@ class TestExtractAudioClips:
         existing_file.write_bytes(b"audio")
 
         als_path = tmp_path / "song.als"
-        als_content = create_minimal_als_xml([
-            {
-                "track_name": "Vocal 1",
-                "clip_name": "Exists",
-                "start_beats": "0",
-                "end_beats": "64",
-                "relative_path": "Samples/exists.wav",
-                "absolute_path": "",
-            },
-            {
-                "track_name": "Vocal 2",
-                "clip_name": "Missing",
-                "start_beats": "64",
-                "end_beats": "128",
-                "relative_path": "Samples/missing.wav",
-                "absolute_path": "/nonexistent/missing.wav",
-            },
-        ])
+        als_content = create_minimal_als_xml(
+            [
+                {
+                    "track_name": "Vocal 1",
+                    "clip_name": "Exists",
+                    "start_beats": "0",
+                    "end_beats": "64",
+                    "relative_path": "Samples/exists.wav",
+                    "absolute_path": "",
+                },
+                {
+                    "track_name": "Vocal 2",
+                    "clip_name": "Missing",
+                    "start_beats": "64",
+                    "end_beats": "128",
+                    "relative_path": "Samples/missing.wav",
+                    "absolute_path": "/nonexistent/missing.wav",
+                },
+            ]
+        )
         als_path.write_bytes(als_content)
 
         clips = extract_audio_clips(als_path, bpm=120.0)
@@ -440,16 +448,18 @@ class TestExtractAudioClips:
         audio_file.write_bytes(b"audio")
 
         als_path = tmp_path / "song.als"
-        als_content = create_minimal_als_xml([
-            {
-                "track_name": "Track",
-                "clip_name": "Clip",
-                "start_beats": "60",
-                "end_beats": "120",
-                "relative_path": "Samples/audio.wav",
-                "absolute_path": "",
-            }
-        ])
+        als_content = create_minimal_als_xml(
+            [
+                {
+                    "track_name": "Track",
+                    "clip_name": "Clip",
+                    "start_beats": "60",
+                    "end_beats": "120",
+                    "relative_path": "Samples/audio.wav",
+                    "absolute_path": "",
+                }
+            ]
+        )
         als_path.write_bytes(als_content)
 
         # At 60 BPM: 60 beats = 60 seconds

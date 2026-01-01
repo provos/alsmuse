@@ -815,10 +815,12 @@ class TestSegmentsToLines:
 
     def test_single_short_segment_becomes_one_line(self) -> None:
         """A segment with few words becomes a single line."""
-        words = self._make_words([
-            ("hello", 0.0, 0.5),
-            ("world", 0.6, 1.0),
-        ])
+        words = self._make_words(
+            [
+                ("hello", 0.0, 0.5),
+                ("world", 0.6, 1.0),
+            ]
+        )
         segment = self._make_segment("hello world", 0.0, 1.0, words)
 
         result = segments_to_lines([segment])
@@ -917,10 +919,12 @@ class TestSegmentsToLines:
 
     def test_preserves_word_timing(self) -> None:
         """Word timing is preserved in output lines."""
-        words = self._make_words([
-            ("hello", 1.5, 2.0),
-            ("world", 2.5, 3.0),
-        ])
+        words = self._make_words(
+            [
+                ("hello", 1.5, 2.0),
+                ("world", 2.5, 3.0),
+            ]
+        )
         segment = self._make_segment("hello world", 1.5, 3.0, words)
 
         result = segments_to_lines([segment])
@@ -932,10 +936,12 @@ class TestSegmentsToLines:
 
     def test_line_timing_from_words(self) -> None:
         """Line start/end comes from first/last word timing."""
-        words = self._make_words([
-            ("hello", 1.5, 2.0),
-            ("world", 2.5, 3.0),
-        ])
+        words = self._make_words(
+            [
+                ("hello", 1.5, 2.0),
+                ("world", 2.5, 3.0),
+            ]
+        )
         segment = self._make_segment("hello world", 1.0, 4.0, words)
 
         result = segments_to_lines([segment])
@@ -966,9 +972,7 @@ class TestTimedSegmentModel:
         """All fields are accessible after construction."""
         word1 = TimedWord(text="hello", start=1.0, end=1.5)
         word2 = TimedWord(text="world", start=1.6, end=2.0)
-        segment = TimedSegment(
-            text="hello world", start=1.0, end=2.0, words=(word1, word2)
-        )
+        segment = TimedSegment(text="hello world", start=1.0, end=2.0, words=(word1, word2))
 
         assert segment.text == "hello world"
         assert segment.start == 1.0

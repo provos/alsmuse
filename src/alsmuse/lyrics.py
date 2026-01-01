@@ -55,9 +55,7 @@ SIMPLE_TIMED_PATTERN = re.compile(r"^(\d{1,2}):(\d{2})\.(\d{2,3})\s+(.+)$")
 ENHANCED_WORD_PATTERN = re.compile(r"<(\d{2}):(\d{2})\.(\d{2,3})>")
 
 
-def _parse_timestamp_components(
-    minutes: str, seconds: str, centis: str
-) -> float:
+def _parse_timestamp_components(minutes: str, seconds: str, centis: str) -> float:
     """Convert timestamp components to seconds.
 
     Args:
@@ -182,11 +180,9 @@ def parse_lrc_lyrics(content: str) -> list[TimedLine]:
             match = LRC_TIMESTAMP_PATTERN.match(remaining)
             if not match:
                 break
-            timestamp = _parse_timestamp_components(
-                match.group(1), match.group(2), match.group(3)
-            )
+            timestamp = _parse_timestamp_components(match.group(1), match.group(2), match.group(3))
             timestamps.append(timestamp)
-            remaining = remaining[match.end():]
+            remaining = remaining[match.end() :]
 
         # Get the text after all timestamps
         text = remaining.strip()
@@ -245,9 +241,7 @@ def parse_simple_timed_lyrics(content: str) -> list[TimedLine]:
             logger.warning("Skipping line without valid timestamp: %s", line[:50])
             continue
 
-        timestamp = _parse_timestamp_components(
-            match.group(1), match.group(2), match.group(3)
-        )
+        timestamp = _parse_timestamp_components(match.group(1), match.group(2), match.group(3))
         text = match.group(4).strip()
 
         if not text:
@@ -309,7 +303,7 @@ def parse_enhanced_lrc(content: str) -> list[TimedLine]:
         line_start = _parse_timestamp_components(
             line_match.group(1), line_match.group(2), line_match.group(3)
         )
-        remaining = line[line_match.end():]
+        remaining = line[line_match.end() :]
 
         # Parse word timestamps and words
         words: list[TimedWord] = []
@@ -346,11 +340,7 @@ def parse_enhanced_lrc(content: str) -> list[TimedLine]:
         # Create TimedWord objects
         for idx, (ts, word_text) in enumerate(word_timestamps):
             # For end time, use next word's start or estimate for last word
-            end_ts = (
-                word_timestamps[idx + 1][0]
-                if idx + 1 < len(word_timestamps)
-                else ts + 0.5
-            )
+            end_ts = word_timestamps[idx + 1][0] if idx + 1 < len(word_timestamps) else ts + 0.5
 
             words.append(
                 TimedWord(

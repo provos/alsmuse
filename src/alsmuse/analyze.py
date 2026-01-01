@@ -197,9 +197,7 @@ def analyze_als_v2(
             phrases = distribute_lyrics(phrases, section_lyrics)
             show_lyrics = True
 
-    return format_phrase_table(
-        phrases, bpm, show_events=show_events, show_lyrics=show_lyrics
-    )
+    return format_phrase_table(phrases, bpm, show_events=show_events, show_lyrics=show_lyrics)
 
 
 def detect_track_events_from_als_phrase_aligned(
@@ -240,9 +238,7 @@ def detect_track_events_from_als_phrase_aligned(
         if not clip_contents:
             continue
 
-        events = detect_events_from_clip_contents_phrase_aligned(
-            track_name, clip_contents, phrases
-        )
+        events = detect_events_from_clip_contents_phrase_aligned(track_name, clip_contents, phrases)
         all_events.extend(events)
 
     return all_events
@@ -394,11 +390,7 @@ def align_and_distribute_lyrics(
         )
 
         # Step 5: Reconstruct lines and distribute to phrases
-        original_lines = [
-            line.strip()
-            for line in all_lyrics_text.split("\n")
-            if line.strip()
-        ]
+        original_lines = [line.strip() for line in all_lyrics_text.split("\n") if line.strip()]
         timed_lines = words_to_lines(timed_words, original_lines)
 
         # Step 6: Save aligned lyrics if requested (in LRC format)
