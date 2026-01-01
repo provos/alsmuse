@@ -9,6 +9,7 @@ import pytest
 
 from alsmuse.audio import (
     VOCAL_KEYWORDS,
+    _beats_to_file_seconds,
     beats_to_seconds,
     combine_clips_to_audio,
     extract_audio_clips,
@@ -187,6 +188,160 @@ class TestBeatsToSeconds:
     def test_zero_beats(self) -> None:
         """Zero beats equals zero seconds."""
         assert beats_to_seconds(0.0, 120.0) == 0.0
+
+
+class TestBeatsToFileSeconds:
+    """Tests for _beats_to_file_seconds function with warp markers."""
+
+    def test_no_warp_markers_falls_back_to_bpm(self) -> None:
+        """Without warp markers, use BPM-based conversion."""
+        # At 120 BPM, 1 beat = 0.5 seconds
+        result = _beats_to_file_seconds(1.0, [], 120.0)
+        assert result == 0.5
+
+        result = _beats_to_file_seconds(4.0, [], 120.0)
+        assert result == 2.0
+
+    def test_single_warp_marker_at_origin(self) -> None:
+        """Single warp marker at origin uses BPM for extrapolation."""
+        # Marker: beat 0 = 0 seconds
+        markers = [(0.0, 0.0)]
+        # Should extrapolate using BPM
+        result = _beats_to_file_seconds(2.0, markers, 120.0)
+        assert result == pytest.approx(1.0)  # 2 beats at 120 BPM = 1 second
+
+    def test_two_markers_interpolation(self) -> None:
+        """Interpolate between two warp markers."""
+        # Marker 0: beat 0 = 0 seconds
+        # Marker 1: beat 4 = 2 seconds (matches 120 BPM)
+        markers = [(0.0, 0.0), (4.0, 2.0)]
+
+        # At beat 2, should be exactly 1 second (midpoint)
+        result = _beats_to_file_seconds(2.0, markers, 120.0)
+        assert result == pytest.approx(1.0)
+
+        # At beat 1, should be 0.5 seconds
+        result = _beats_to_file_seconds(1.0, markers, 120.0)
+        assert result == pytest.approx(0.5)
+
+    def test_two_markers_time_stretched(self) -> None:
+        """Markers indicating time-stretched audio."""
+        # Audio is stretched: 4 beats map to 1 second (double speed)
+        markers = [(0.0, 0.0), (4.0, 1.0)]
+
+        result = _beats_to_file_seconds(2.0, markers, 120.0)
+        assert result == pytest.approx(0.5)
+
+        result = _beats_to_file_seconds(4.0, markers, 120.0)
+        assert result == pytest.approx(1.0)
+
+    def test_multiple_markers_interpolation(self) -> None:
+        """Interpolate with multiple warp markers (non-linear warping)."""
+        # Non-linear warping: different stretch rates in different regions
+        markers = [
+            (0.0, 0.0),
+            (2.0, 1.0),   # First 2 beats = 1 second
+            (4.0, 1.5),   # Next 2 beats = 0.5 seconds (faster)
+            (6.0, 3.0),   # Next 2 beats = 1.5 seconds (slower)
+        ]
+
+        # Beat 1 is between markers 0 and 1
+        result = _beats_to_file_seconds(1.0, markers, 120.0)
+        assert result == pytest.approx(0.5)
+
+        # Beat 3 is between markers 1 and 2
+        result = _beats_to_file_seconds(3.0, markers, 120.0)
+        assert result == pytest.approx(1.25)
+
+        # Beat 5 is between markers 2 and 3
+        result = _beats_to_file_seconds(5.0, markers, 120.0)
+        assert result == pytest.approx(2.25)
+
+    def test_extrapolate_before_first_marker(self) -> None:
+        """Extrapolate backwards before first warp marker."""
+        # First marker is at beat 2 = 1 second
+        markers = [(2.0, 1.0), (4.0, 2.0)]
+
+        # Beat 0 should extrapolate using slope from first two markers
+        # Slope = (2.0 - 1.0) / (4.0 - 2.0) = 0.5 sec/beat
+        # Result = 1.0 + 0.5 * (0.0 - 2.0) = 0.0
+        result = _beats_to_file_seconds(0.0, markers, 120.0)
+        assert result == pytest.approx(0.0)
+
+        # Beat 1 should be 0.5 seconds
+        result = _beats_to_file_seconds(1.0, markers, 120.0)
+        assert result == pytest.approx(0.5)
+
+    def test_extrapolate_after_last_marker(self) -> None:
+        """Extrapolate forwards after last warp marker."""
+        markers = [(0.0, 0.0), (4.0, 2.0)]
+
+        # Beat 6 should extrapolate using slope from last two markers
+        # Slope = (2.0 - 0.0) / (4.0 - 0.0) = 0.5 sec/beat
+        # Result = 2.0 + 0.5 * (6.0 - 4.0) = 3.0
+        result = _beats_to_file_seconds(6.0, markers, 120.0)
+        assert result == pytest.approx(3.0)
+
+    def test_negative_beat_time_markers(self) -> None:
+        """Handle warp markers with negative BeatTime values."""
+        # This happens when audio starts before the clip's visible region
+        # SecTime=0 corresponds to beat -4 (audio started 4 beats before clip)
+        markers = [(-4.0, 0.0), (0.0, 2.0)]
+
+        # Beat 0 should be at 2 seconds
+        result = _beats_to_file_seconds(0.0, markers, 120.0)
+        assert result == pytest.approx(2.0)
+
+        # Beat -4 should be at 0 seconds (start of file)
+        result = _beats_to_file_seconds(-4.0, markers, 120.0)
+        assert result == pytest.approx(0.0)
+
+        # Beat -2 should be at 1 second (midpoint)
+        result = _beats_to_file_seconds(-2.0, markers, 120.0)
+        assert result == pytest.approx(1.0)
+
+    def test_exact_marker_positions(self) -> None:
+        """Beat positions exactly at markers return marker SecTime."""
+        markers = [(0.0, 0.0), (2.0, 1.5), (4.0, 2.0)]
+
+        result = _beats_to_file_seconds(0.0, markers, 120.0)
+        assert result == pytest.approx(0.0)
+
+        result = _beats_to_file_seconds(2.0, markers, 120.0)
+        assert result == pytest.approx(1.5)
+
+        result = _beats_to_file_seconds(4.0, markers, 120.0)
+        assert result == pytest.approx(2.0)
+
+    def test_real_world_verse2_clip(self) -> None:
+        """Test with actual warp markers from the Verse 2 clip."""
+        # From the actual ALS file:
+        # Marker 0: SecTime=0, BeatTime=1.375
+        # Marker 1: SecTime=0.0170454545454545442, BeatTime=1.40625
+        markers = [(1.375, 0.0), (1.40625, 0.0170454545454545442)]
+
+        # LoopStart = 1.375 should map to SecTime = 0
+        result = _beats_to_file_seconds(1.375, markers, 110.0)
+        assert result == pytest.approx(0.0)
+
+    def test_real_world_hihat_clip(self) -> None:
+        """Test with warp markers from a time-stretched hihat clip."""
+        # Subset of actual markers showing non-linear time stretching
+        markers = [
+            (0.0, 0.0),
+            (0.5, 0.2857),
+            (0.75, 0.4221),
+            (1.25, 0.6971),
+        ]
+
+        # Beat 0.5 should be at 0.2857 seconds
+        result = _beats_to_file_seconds(0.5, markers, 110.0)
+        assert result == pytest.approx(0.2857)
+
+        # Beat 0.625 (midpoint between 0.5 and 0.75) should interpolate
+        expected = 0.2857 + 0.5 * (0.4221 - 0.2857)
+        result = _beats_to_file_seconds(0.625, markers, 110.0)
+        assert result == pytest.approx(expected)
 
 
 def create_minimal_als_xml(
