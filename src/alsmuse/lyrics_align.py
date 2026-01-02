@@ -236,6 +236,82 @@ def words_to_lines(
     return result
 
 
+def validate_timed_lines(
+    timed_lines: list[TimedLine],
+    min_gap_seconds: float = 0.3,
+) -> list[str]:
+    """Validate timed lines and return warning messages for issues.
+
+    Checks for:
+    1. Lines with start=0.0 that couldn't be aligned
+    2. Lines with impossibly close timing (within min_gap_seconds)
+
+    Args:
+        timed_lines: List of timed lines to validate.
+        min_gap_seconds: Minimum expected gap between line starts.
+            Lines closer than this are flagged as suspicious.
+
+    Returns:
+        List of warning messages (empty if no issues found).
+    """
+    warnings: list[str] = []
+
+    # Check for unaligned lines (start=0.0)
+    unaligned = [line for line in timed_lines if line.start == 0.0 and line.text.strip()]
+    if unaligned:
+        warnings.append(
+            f"Warning: {len(unaligned)} line(s) could not be aligned (time=0:00):"
+        )
+        for line in unaligned[:5]:  # Show first 5
+            truncated = line.text[:50] + "..." if len(line.text) > 50 else line.text
+            warnings.append(f"  - {truncated}")
+        if len(unaligned) > 5:
+            warnings.append(f"  ... and {len(unaligned) - 5} more")
+
+    # Check for impossibly close timing
+    # Build list of (timestamp, line_text) for non-zero lines, sorted by time
+    timed = [(line.start, line.text) for line in timed_lines if line.start > 0.0]
+    timed.sort(key=lambda x: x[0])
+
+    close_groups: list[list[tuple[float, str]]] = []
+    current_group: list[tuple[float, str]] = []
+
+    for start, text in timed:
+        if not current_group:
+            current_group.append((start, text))
+        else:
+            prev_start = current_group[-1][0]
+            if start - prev_start < min_gap_seconds:
+                current_group.append((start, text))
+            else:
+                if len(current_group) > 1:
+                    close_groups.append(current_group)
+                current_group = [(start, text)]
+
+    # Don't forget the last group
+    if len(current_group) > 1:
+        close_groups.append(current_group)
+
+    if close_groups:
+        total_affected = sum(len(g) for g in close_groups)
+        warnings.append(
+            f"Warning: {total_affected} lines have suspiciously close timing "
+            f"(within {min_gap_seconds}s):"
+        )
+        for group in close_groups[:3]:  # Show first 3 groups
+            for start, text in group:
+                mins, secs = divmod(start, 60)
+                truncated = text[:40] + "..." if len(text) > 40 else text
+                warnings.append(f"  [{int(mins):02d}:{secs:05.2f}] {truncated}")
+            if group != close_groups[-1] and close_groups.index(group) < 2:
+                warnings.append("")  # Blank line between groups
+        if len(close_groups) > 3:
+            remaining = sum(len(g) for g in close_groups[3:])
+            warnings.append(f"  ... and {remaining} more lines in other groups")
+
+    return warnings
+
+
 def align_lyrics(
     audio_path: Path,
     lyrics_text: str,

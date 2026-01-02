@@ -43,6 +43,7 @@ from .lyrics_align import (
     align_lyrics,
     segments_to_lines,
     transcribe_lyrics,
+    validate_timed_lines,
     words_to_lines,
 )
 from .midi import extract_midi_clip_contents
@@ -482,6 +483,11 @@ def align_and_distribute_lyrics(
         ]
         timed_lines = words_to_lines(timed_words, original_lines)
 
+        # Validate alignment and warn about issues
+        alignment_warnings = validate_timed_lines(timed_lines)
+        for warning in alignment_warnings:
+            click.echo(warning, err=True)
+
         # Step 6: Save aligned lyrics if requested (in LRC format)
         if save_lyrics_path is not None:
             try:
@@ -605,6 +611,11 @@ def transcribe_and_distribute_lyrics(
 
         # Step 7: Convert segments to lines
         timed_lines = segments_to_lines(segments)
+
+        # Validate transcription and warn about issues
+        transcription_warnings = validate_timed_lines(timed_lines)
+        for warning in transcription_warnings:
+            click.echo(warning, err=True)
 
         # Step 8: Distribute to phrases
         return distribute_timed_lyrics(phrases, timed_lines, bpm)
