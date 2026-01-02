@@ -12,6 +12,7 @@ import click
 
 from .analyze import analyze_als
 from .exceptions import ParseError, TrackNotFoundError
+from .visualize import visualize_als
 
 
 @click.group()
@@ -201,6 +202,153 @@ def analyze(
         sys.exit(1)
     except TrackNotFoundError as e:
         click.echo(f"Track not found: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command()
+@click.argument("als_file", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Output video file path (e.g., output.mp4).",
+)
+@click.option(
+    "--audio",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Audio file to mux into the video (WAV, MP3, etc.).",
+)
+@click.option(
+    "--structure-track",
+    default="STRUCTURE",
+    help="Name of the structure track containing section markers.",
+)
+@click.option(
+    "--phrase-bars",
+    type=int,
+    default=2,
+    help="Bars per phrase for detailed output (default: 2).",
+)
+@click.option(
+    "--lyrics",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to lyrics file (LRC or plain text with section headers).",
+)
+@click.option(
+    "--vocal-track",
+    type=str,
+    multiple=True,
+    help="Specific vocal track(s) to use for alignment. Can be repeated.",
+)
+@click.option(
+    "--all-vocals",
+    is_flag=True,
+    help="Use all detected vocal tracks without prompting.",
+)
+@click.option(
+    "--transcribe",
+    is_flag=True,
+    help="Transcribe lyrics from vocal audio using ASR.",
+)
+@click.option(
+    "--language",
+    type=str,
+    default="en",
+    help="Language code for transcription/alignment (default: en).",
+)
+@click.option(
+    "--whisper-model",
+    type=click.Choice(["tiny", "base", "small", "medium", "large"]),
+    default="base",
+    help="Whisper model size for transcription/alignment (default: base).",
+)
+def visualize(
+    als_file: Path,
+    output: Path,
+    audio: Path | None,
+    structure_track: str,
+    phrase_bars: int,
+    lyrics: Path | None,
+    vocal_track: tuple[str, ...],
+    all_vocals: bool,
+    transcribe: bool,
+    language: str,
+    whisper_model: str,
+) -> None:
+    """Generate a lyrics/cues visualization video from an Ableton Live Set.
+
+    Creates an MP4 video showing:
+    - Section markers (upper left)
+    - Timecode (upper right)
+    - Lyrics with previous/current/next context (center)
+    - Track enter/exit events (lower area)
+    - Progress bar (bottom)
+
+    The video is rendered at 1280x720 (720p) at 24fps with H.264 encoding.
+
+    EXAMPLES:
+
+        alsmuse visualize song.als -o output.mp4
+
+        alsmuse visualize song.als -o output.mp4 --audio song.wav
+
+        alsmuse visualize song.als -o output.mp4 --lyrics lyrics.lrc
+
+        alsmuse visualize song.als -o output.mp4 --transcribe --audio vocals.wav
+    """
+    # Validate mutual exclusion: --transcribe and --lyrics cannot be used together
+    if transcribe and lyrics is not None:
+        click.echo(
+            "Error: --transcribe and --lyrics are mutually exclusive. Use one or the other.",
+            err=True,
+        )
+        sys.exit(1)
+
+    try:
+        # Convert bars to beats (assuming 4/4 time)
+        beats_per_phrase = phrase_bars * 4
+
+        # Convert vocal_track tuple to None if empty
+        vocal_tracks = vocal_track if vocal_track else None
+
+        def progress_callback(frame_num: int, total_frames: int) -> None:
+            """Display rendering progress."""
+            if frame_num % 24 == 0 or frame_num == total_frames:
+                percent = (frame_num / total_frames) * 100
+                click.echo(
+                    f"\rRendering: {frame_num}/{total_frames} frames ({percent:.1f}%)", nl=False
+                )
+            if frame_num == total_frames:
+                click.echo()  # Final newline
+
+        result_path = visualize_als(
+            als_path=als_file,
+            output_path=output,
+            audio_path=audio,
+            structure_track=structure_track,
+            beats_per_phrase=beats_per_phrase,
+            lyrics_path=lyrics,
+            vocal_tracks=vocal_tracks,
+            use_all_vocals=all_vocals,
+            transcribe=transcribe,
+            language=language,
+            model_size=whisper_model,
+            progress_callback=progress_callback,
+        )
+
+        click.echo(f"Video generated: {result_path}")
+
+    except ParseError as e:
+        click.echo(f"Error parsing file: {e}", err=True)
+        sys.exit(1)
+    except TrackNotFoundError as e:
+        click.echo(f"Track not found: {e}", err=True)
+        sys.exit(1)
+    except RuntimeError as e:
+        click.echo(f"Error generating video: {e}", err=True)
         sys.exit(1)
 
 
