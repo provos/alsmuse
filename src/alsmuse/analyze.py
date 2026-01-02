@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import click
@@ -58,6 +59,7 @@ from .parser import (
     parse_als_xml,
 )
 from .phrases import subdivide_sections
+from .visualizer import generate_visualizer
 
 logger = logging.getLogger(__name__)
 
@@ -93,165 +95,18 @@ def detect_suggested_start_bar(live_set: LiveSet) -> int:
     return int(min_beat // beats_per_bar)
 
 
-def analyze_als(
-    als_path: Path,
-    structure_track: str = "STRUCTURE",
-    beats_per_phrase: int = 8,
-    show_events: bool = True,
-    lyrics_path: Path | None = None,
-    align_vocals: bool = False,
-    vocal_tracks: tuple[str, ...] | None = None,
-    use_all_vocals: bool = False,
-    save_vocals_path: Path | None = None,
-    transcribe: bool = False,
-    save_lyrics_path: Path | None = None,
-    language: str = "en",
-    model_size: str = "base",
-    interactive: bool = True,
-) -> str:
-    """Analysis pipeline with phrase subdivision and event detection.
+def get_all_track_names(live_set: LiveSet) -> list[str]:
+    """Get all effectively enabled track names from an ALS file.
 
-    Extended analysis pipeline that divides sections into phrase-sized
-    chunks for more detailed A/V scripts with per-phrase timing and
-    track enter/exit events.
-
-    1. Parse ALS file
-    2. Load config if exists (vocal tracks, category overrides)
-    3. Extract sections using StructureTrackExtractor
-    4. Fill gaps with transitions
-    5. Subdivide sections into phrases
-    6. Optionally run interactive category review (if TTY and interactive=True)
-    7. Optionally detect MIDI events and merge into phrases
-    8. Optionally transcribe lyrics from vocal audio (if transcribe=True)
-    9. Optionally parse and distribute lyrics (with optional forced alignment)
-    10. Format output as markdown phrase table
+    Returns only tracks that are enabled and not in disabled groups.
 
     Args:
-        als_path: Path to the .als file
-        structure_track: Name of the structure track (case-insensitive)
-        beats_per_phrase: Number of beats per phrase (default 8 = 2 bars in 4/4)
-        show_events: Whether to detect and show track events (default True)
-        lyrics_path: Optional path to lyrics file
-        align_vocals: If True, use forced alignment for precise lyrics timing
-        vocal_tracks: Specific vocal track names to use for alignment
-        use_all_vocals: If True, use all detected vocal tracks without prompting
-        save_vocals_path: If provided, save combined vocals to this path for validation
-        transcribe: If True, transcribe lyrics from vocal audio using ASR
-        save_lyrics_path: If provided, save lyrics to this path (LRC format with timestamps)
-        language: Language code for transcription/alignment (default: "en")
-        model_size: Whisper model size (default: "base")
-        interactive: If True and TTY available, prompt for category review
+        live_set: Pre-parsed LiveSet containing track/group enabled state.
 
     Returns:
-        Markdown formatted phrase table string
-
-    Raises:
-        ParseError: If the file cannot be parsed
-        TrackNotFoundError: If the structure track is not found
+        List of enabled track names (both MIDI and audio tracks).
     """
-    live_set = parse_als_file(als_path)
-    bpm = live_set.tempo.bpm
-
-    # Load existing config
-    config = load_config(als_path)
-    category_overrides = config.category_overrides if config else {}
-
-    extractor = StructureTrackExtractor(structure_track)
-    sections = extractor.extract(live_set)
-    sections = fill_gaps(sections)
-
-    phrases = subdivide_sections(sections, beats_per_phrase)
-
-    # Interactive category review (if TTY available and enabled)
-    if show_events and interactive and sys.stdin.isatty():
-        track_names = get_all_track_names(live_set)
-        current_categories = categorize_all_tracks(track_names, category_overrides)
-        available_categories = get_available_categories()
-
-        new_overrides = prompt_category_review(
-            track_names, current_categories, available_categories
-        )
-
-        if new_overrides:
-            # Merge new overrides with existing
-            category_overrides = {**category_overrides, **new_overrides}
-
-            # Save to config
-            updated_config = MuseConfig(
-                vocal_tracks=config.vocal_tracks if config else [],
-                category_overrides=category_overrides,
-            )
-            save_config(als_path, updated_config)
-
-    if show_events:
-        events = detect_track_events_from_als_phrase_aligned(
-            als_path, phrases, category_overrides, sections
-        )
-        phrases = merge_events_into_phrases(phrases, events)
-
-    # Handle transcription mode (ASR from vocal audio)
-    show_lyrics = False
-    if transcribe:
-        try:
-            phrases = transcribe_and_distribute_lyrics(
-                als_path=als_path,
-                phrases=phrases,
-                bpm=bpm,
-                vocal_tracks=vocal_tracks,
-                use_all_vocals=use_all_vocals,
-                save_vocals_path=save_vocals_path,
-                save_lyrics_path=save_lyrics_path,
-                language=language,
-                model_size=model_size,
-            )
-            show_lyrics = True
-        except AlignmentError as e:
-            # Log error and continue without lyrics
-            click.echo(f"Transcription failed: {e}", err=True)
-
-    # Parse and distribute lyrics if provided (and not in transcribe mode)
-    elif lyrics_path is not None:
-        # Try to parse as timed lyrics first (auto-detection)
-        timed_lines, section_lyrics = parse_lyrics_file_auto(lyrics_path)
-
-        if timed_lines is not None:
-            # Lyrics have timestamps - use directly, no alignment needed
-            phrases = distribute_timed_lyrics(phrases, timed_lines, bpm)
-            show_lyrics = True
-        elif align_vocals:
-            # Plain lyrics with alignment requested
-            try:
-                phrases = align_and_distribute_lyrics(
-                    als_path=als_path,
-                    lyrics_path=lyrics_path,
-                    phrases=phrases,
-                    bpm=bpm,
-                    vocal_tracks=vocal_tracks,
-                    use_all_vocals=use_all_vocals,
-                    save_vocals_path=save_vocals_path,
-                    save_lyrics_path=save_lyrics_path,
-                    language=language,
-                    model_size=model_size,
-                )
-                show_lyrics = True
-            except AlignmentError as e:
-                # Log warning and fall back to heuristic distribution
-                click.echo(
-                    f"Alignment failed: {e}. Falling back to heuristic distribution.",
-                    err=True,
-                )
-                if section_lyrics is None:
-                    section_lyrics = parse_lyrics_file(lyrics_path)
-                phrases = distribute_lyrics(phrases, section_lyrics)
-                show_lyrics = True
-        else:
-            # Plain lyrics, heuristic distribution
-            if section_lyrics is None:
-                section_lyrics = parse_lyrics_file(lyrics_path)
-            phrases = distribute_lyrics(phrases, section_lyrics)
-            show_lyrics = True
-
-    return format_phrase_table(phrases, bpm, show_events=show_events, show_lyrics=show_lyrics)
+    return [t.name for t in live_set.tracks if live_set.is_track_effectively_enabled(t)]
 
 
 def detect_track_events_from_als_phrase_aligned(
@@ -389,20 +244,6 @@ def extract_track_clip_contents(
             result[track_name] = clip_contents
 
     return result
-
-
-def get_all_track_names(live_set: LiveSet) -> list[str]:
-    """Get all effectively enabled track names from an ALS file.
-
-    Returns only tracks that are enabled and not in disabled groups.
-
-    Args:
-        live_set: Pre-parsed LiveSet containing track/group enabled state.
-
-    Returns:
-        List of enabled track names (both MIDI and audio tracks).
-    """
-    return [t.name for t in live_set.tracks if live_set.is_track_effectively_enabled(t)]
 
 
 def align_and_distribute_lyrics(
@@ -700,3 +541,271 @@ def transcribe_and_distribute_lyrics(
                 combined_path.unlink()
             except OSError:
                 logger.warning("Failed to clean up temporary file: %s", combined_path)
+
+
+def _prepare_phrases(
+    als_path: Path,
+    structure_track: str,
+    beats_per_phrase: int,
+    show_events: bool,
+    lyrics_path: Path | None,
+    align_vocals: bool,
+    vocal_tracks: tuple[str, ...] | None,
+    use_all_vocals: bool,
+    save_vocals_path: Path | None,
+    transcribe: bool,
+    save_lyrics_path: Path | None,
+    language: str,
+    model_size: str,
+    interactive: bool,
+    start_bar: int | None,
+) -> tuple[list[Phrase], float, float, bool]:
+    """Prepare phrases by parsing ALS, extracting sections, and processing lyrics.
+
+    This internal function contains the common pipeline used by both markdown
+    and video output paths. It handles:
+    1. Parsing the ALS file
+    2. Loading config
+    3. Extracting sections
+    4. Filling gaps with transitions
+    5. Subdividing into phrases
+    6. Interactive category review (if enabled)
+    7. Event detection and merging
+    8. Lyrics processing (transcription, alignment, or plain distribution)
+
+    Args:
+        als_path: Path to the .als file
+        structure_track: Name of the structure track (case-insensitive)
+        beats_per_phrase: Number of beats per phrase
+        show_events: Whether to detect and show track events
+        lyrics_path: Optional path to lyrics file
+        align_vocals: If True, use forced alignment for lyrics timing
+        vocal_tracks: Specific vocal track names to use for alignment
+        use_all_vocals: If True, use all detected vocal tracks without prompting
+        save_vocals_path: If provided, save combined vocals to this path
+        transcribe: If True, transcribe lyrics from vocal audio using ASR
+        save_lyrics_path: If provided, save lyrics to this path
+        language: Language code for transcription/alignment
+        model_size: Whisper model size
+        interactive: If True and TTY available, prompt for category review
+        start_bar: Optional bar number where the song starts (for time offset)
+
+    Returns:
+        Tuple of (phrases, bpm, total_beats, show_lyrics):
+        - phrases: List of Phrase objects with events and lyrics
+        - bpm: Tempo in beats per minute
+        - total_beats: Total beats from the last phrase
+        - show_lyrics: Whether lyrics were successfully processed
+    """
+    live_set = parse_als_file(als_path)
+    bpm = live_set.tempo.bpm
+
+    # Load existing config
+    config = load_config(als_path)
+    category_overrides = config.category_overrides if config else {}
+
+    extractor = StructureTrackExtractor(structure_track)
+    sections = extractor.extract(live_set)
+    sections = fill_gaps(sections)
+
+    phrases = subdivide_sections(sections, beats_per_phrase)
+
+    # Calculate total beats from the last phrase
+    total_beats = phrases[-1].end_beats if phrases else 0.0
+
+    # Interactive category review (if TTY available and enabled)
+    if show_events and interactive and sys.stdin.isatty():
+        track_names = get_all_track_names(live_set)
+        current_categories = categorize_all_tracks(track_names, category_overrides)
+        available_categories = get_available_categories()
+
+        new_overrides = prompt_category_review(
+            track_names, current_categories, available_categories
+        )
+
+        if new_overrides:
+            # Merge new overrides with existing
+            category_overrides = {**category_overrides, **new_overrides}
+
+            # Save to config
+            updated_config = MuseConfig(
+                vocal_tracks=config.vocal_tracks if config else [],
+                category_overrides=category_overrides,
+            )
+            save_config(als_path, updated_config)
+
+    if show_events:
+        events = detect_track_events_from_als_phrase_aligned(
+            als_path, phrases, category_overrides, sections
+        )
+        phrases = merge_events_into_phrases(phrases, events)
+
+    # Handle transcription mode (ASR from vocal audio)
+    show_lyrics = False
+    if transcribe:
+        try:
+            phrases = transcribe_and_distribute_lyrics(
+                als_path=als_path,
+                phrases=phrases,
+                bpm=bpm,
+                vocal_tracks=vocal_tracks,
+                use_all_vocals=use_all_vocals,
+                save_vocals_path=save_vocals_path,
+                save_lyrics_path=save_lyrics_path,
+                language=language,
+                model_size=model_size,
+            )
+            show_lyrics = True
+        except AlignmentError as e:
+            # Log error and continue without lyrics
+            click.echo(f"Transcription failed: {e}", err=True)
+
+    # Parse and distribute lyrics if provided (and not in transcribe mode)
+    elif lyrics_path is not None:
+        # Try to parse as timed lyrics first (auto-detection)
+        timed_lines, section_lyrics = parse_lyrics_file_auto(lyrics_path)
+
+        if timed_lines is not None:
+            # Lyrics have timestamps - use directly, no alignment needed
+            phrases = distribute_timed_lyrics(phrases, timed_lines, bpm)
+            show_lyrics = True
+        elif align_vocals:
+            # Plain lyrics with alignment requested
+            try:
+                phrases = align_and_distribute_lyrics(
+                    als_path=als_path,
+                    lyrics_path=lyrics_path,
+                    phrases=phrases,
+                    bpm=bpm,
+                    vocal_tracks=vocal_tracks,
+                    use_all_vocals=use_all_vocals,
+                    save_vocals_path=save_vocals_path,
+                    save_lyrics_path=save_lyrics_path,
+                    language=language,
+                    model_size=model_size,
+                )
+                show_lyrics = True
+            except AlignmentError as e:
+                # Log warning and fall back to heuristic distribution
+                click.echo(
+                    f"Alignment failed: {e}. Falling back to heuristic distribution.",
+                    err=True,
+                )
+                if section_lyrics is None:
+                    section_lyrics = parse_lyrics_file(lyrics_path)
+                phrases = distribute_lyrics(phrases, section_lyrics)
+                show_lyrics = True
+        else:
+            # Plain lyrics, heuristic distribution
+            if section_lyrics is None:
+                section_lyrics = parse_lyrics_file(lyrics_path)
+            phrases = distribute_lyrics(phrases, section_lyrics)
+            show_lyrics = True
+
+    return phrases, bpm, total_beats, show_lyrics
+
+
+def analyze_als(
+    als_path: Path,
+    structure_track: str = "STRUCTURE",
+    beats_per_phrase: int = 8,
+    show_events: bool = True,
+    lyrics_path: Path | None = None,
+    align_vocals: bool = False,
+    vocal_tracks: tuple[str, ...] | None = None,
+    use_all_vocals: bool = False,
+    save_vocals_path: Path | None = None,
+    transcribe: bool = False,
+    save_lyrics_path: Path | None = None,
+    language: str = "en",
+    model_size: str = "base",
+    interactive: bool = True,
+    output_path: Path | None = None,
+    audio_path: Path | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+    start_bar: int | None = None,
+) -> str | Path:
+    """Unified analysis pipeline with output format determined by file extension.
+
+    This function consolidates the analyze and visualize code paths. The output
+    format is determined by the output_path extension:
+    - None or .md extension: Returns markdown formatted phrase table (str)
+    - .mp4 extension: Generates video visualization and returns path (Path)
+
+    The pipeline performs:
+    1. Parse ALS file
+    2. Load config if exists (vocal tracks, category overrides)
+    3. Extract sections using StructureTrackExtractor
+    4. Fill gaps with transitions
+    5. Subdivide sections into phrases
+    6. Optionally run interactive category review (if TTY and interactive=True)
+    7. Optionally detect MIDI events and merge into phrases
+    8. Optionally transcribe lyrics from vocal audio (if transcribe=True)
+    9. Optionally parse and distribute lyrics (with optional forced alignment)
+    10. Output as markdown table or video based on extension
+
+    Args:
+        als_path: Path to the .als file
+        structure_track: Name of the structure track (case-insensitive)
+        beats_per_phrase: Number of beats per phrase (default 8 = 2 bars in 4/4)
+        show_events: Whether to detect and show track events (default True)
+        lyrics_path: Optional path to lyrics file
+        align_vocals: If True, use forced alignment for precise lyrics timing
+        vocal_tracks: Specific vocal track names to use for alignment
+        use_all_vocals: If True, use all detected vocal tracks without prompting
+        save_vocals_path: If provided, save combined vocals to this path for validation
+        transcribe: If True, transcribe lyrics from vocal audio using ASR
+        save_lyrics_path: If provided, save lyrics to this path (LRC format with timestamps)
+        language: Language code for transcription/alignment (default: "en")
+        model_size: Whisper model size (default: "base")
+        interactive: If True and TTY available, prompt for category review
+        output_path: Optional output path. Extension determines format:
+            - None: Return markdown string
+            - .md: Return markdown string (will be written by caller)
+            - .mp4: Generate video file and return path
+        audio_path: Optional audio file to mux into video (only for .mp4 output)
+        progress_callback: Optional callback for video rendering progress
+        start_bar: Optional bar number where the song starts (for time offset)
+
+    Returns:
+        str: Markdown formatted phrase table (when output_path is None or .md)
+        Path: Path to generated video file (when output_path is .mp4)
+
+    Raises:
+        ParseError: If the file cannot be parsed
+        TrackNotFoundError: If the structure track is not found
+        RuntimeError: If video generation fails (for .mp4 output)
+    """
+    # Prepare phrases using the common pipeline
+    phrases, bpm, total_beats, show_lyrics = _prepare_phrases(
+        als_path=als_path,
+        structure_track=structure_track,
+        beats_per_phrase=beats_per_phrase,
+        show_events=show_events,
+        lyrics_path=lyrics_path,
+        align_vocals=align_vocals,
+        vocal_tracks=vocal_tracks,
+        use_all_vocals=use_all_vocals,
+        save_vocals_path=save_vocals_path,
+        transcribe=transcribe,
+        save_lyrics_path=save_lyrics_path,
+        language=language,
+        model_size=model_size,
+        interactive=interactive,
+        start_bar=start_bar,
+    )
+
+    # Determine output format based on extension
+    if output_path is not None and output_path.suffix.lower() == ".mp4":
+        # Video output
+        return generate_visualizer(
+            phrases=phrases,
+            bpm=bpm,
+            total_beats=total_beats,
+            output_path=output_path,
+            audio_path=audio_path,
+            progress_callback=progress_callback,
+        )
+    else:
+        # Markdown output (default)
+        return format_phrase_table(phrases, bpm, show_events=show_events, show_lyrics=show_lyrics)

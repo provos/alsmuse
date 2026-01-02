@@ -15,7 +15,6 @@ from .config import MuseConfig, load_config, save_config
 from .exceptions import ParseError, TrackNotFoundError
 from .parser import parse_als_file
 from .start_bar_ui import select_start_bar_interactive
-from .visualize import visualize_als
 
 
 @click.group()
@@ -103,7 +102,15 @@ def main() -> None:
     "--output",
     type=click.Path(path_type=Path),
     default=None,
-    help="Save the A/V markdown table to this file instead of printing to stdout.",
+    help="Output file path. Extension determines format: "
+    ".md or no extension outputs markdown A/V table, "
+    ".mp4 outputs video visualization.",
+)
+@click.option(
+    "--audio",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Audio file to mux into video (only used for .mp4 output).",
 )
 @click.option(
     "--start-bar",
@@ -127,6 +134,7 @@ def analyze(
     whisper_model: str,
     save_lyrics: Path | None,
     output: Path | None,
+    audio: Path | None,
     start_bar: int | None,
 ) -> None:
     """Analyze an Ableton Live Set file.
@@ -134,6 +142,31 @@ def analyze(
     Outputs phrase-level chunks of N bars each (default: 2 bars).
     Track enter/exit events are detected by default.
     Use --no-events to disable event detection.
+
+    OUTPUT FORMATS:
+
+    The output format is determined by the -o/--output option:
+
+    - No output option: Print markdown A/V table to stdout
+    - .md extension: Write markdown A/V table to file
+    - .mp4 extension: Generate video visualization
+
+    EXAMPLES:
+
+        # Print A/V table to stdout
+        alsmuse analyze song.als
+
+        # Save A/V table to markdown file
+        alsmuse analyze song.als -o script.md
+
+        # Generate video visualization
+        alsmuse analyze song.als -o output.mp4
+
+        # Generate video with audio track
+        alsmuse analyze song.als -o output.mp4 --audio song.wav
+
+        # Generate video with transcribed lyrics
+        alsmuse analyze song.als -o output.mp4 --transcribe
 
     LYRICS SUPPORT:
 
@@ -179,6 +212,16 @@ def analyze(
             err=True,
         )
         sys.exit(1)
+
+    # Determine if this is video output
+    is_video_output = output is not None and output.suffix.lower() == ".mp4"
+
+    # Warn if --audio is used without video output
+    if audio is not None and not is_video_output:
+        click.echo(
+            "Warning: --audio is only used for .mp4 output. Ignoring.",
+            err=True,
+        )
 
     try:
         # Load existing config
@@ -231,6 +274,22 @@ def analyze(
                 f"Using start bar: {effective_start_bar} (times relative to bar {effective_start_bar})"
             )
 
+        # Define progress callback for video output
+        progress_callback = None
+        if is_video_output:
+
+            def progress_callback(frame_num: int, total_frames: int) -> None:
+                """Display rendering progress."""
+                if frame_num % 24 == 0 or frame_num == total_frames:
+                    percent = (frame_num / total_frames) * 100
+                    click.echo(
+                        f"\rRendering: {frame_num}/{total_frames} frames ({percent:.1f}%)",
+                        nl=False,
+                    )
+                if frame_num == total_frames:
+                    click.echo()  # Final newline
+
+        # Call unified analyze_als function
         result = analyze_als(
             als_file,
             structure_track,
@@ -245,201 +304,23 @@ def analyze(
             save_lyrics_path=save_lyrics,
             language=language,
             model_size=whisper_model,
-            start_bar=effective_start_bar,
-        )
-
-        if output is not None:
-            output.write_text(result)
-            click.echo(f"A/V table saved to: {output}")
-        else:
-            click.echo(result)
-    except ParseError as e:
-        click.echo(f"Error parsing file: {e}", err=True)
-        sys.exit(1)
-    except TrackNotFoundError as e:
-        click.echo(f"Track not found: {e}", err=True)
-        sys.exit(1)
-
-
-@main.command()
-@click.argument("als_file", type=click.Path(exists=True, path_type=Path))
-@click.option(
-    "-o",
-    "--output",
-    type=click.Path(path_type=Path),
-    required=True,
-    help="Output video file path (e.g., output.mp4).",
-)
-@click.option(
-    "--audio",
-    type=click.Path(exists=True, path_type=Path),
-    default=None,
-    help="Audio file to mux into the video (WAV, MP3, etc.).",
-)
-@click.option(
-    "--structure-track",
-    default="STRUCTURE",
-    help="Name of the structure track containing section markers.",
-)
-@click.option(
-    "--phrase-bars",
-    type=int,
-    default=2,
-    help="Bars per phrase for detailed output (default: 2).",
-)
-@click.option(
-    "--lyrics",
-    type=click.Path(exists=True, path_type=Path),
-    default=None,
-    help="Path to lyrics file (LRC or plain text with section headers).",
-)
-@click.option(
-    "--vocal-track",
-    type=str,
-    multiple=True,
-    help="Specific vocal track(s) to use for alignment. Can be repeated.",
-)
-@click.option(
-    "--all-vocals",
-    is_flag=True,
-    help="Use all detected vocal tracks without prompting.",
-)
-@click.option(
-    "--transcribe",
-    is_flag=True,
-    help="Transcribe lyrics from vocal audio using ASR.",
-)
-@click.option(
-    "--language",
-    type=str,
-    default="en",
-    help="Language code for transcription/alignment (default: en).",
-)
-@click.option(
-    "--whisper-model",
-    type=click.Choice(["tiny", "base", "small", "medium", "large", "large-v3"]),
-    default="base",
-    help="Whisper model size for transcription/alignment (default: base).",
-)
-@click.option(
-    "--start-bar",
-    type=int,
-    default=None,
-    help="Bar number where the song starts (times will be relative to this bar). "
-    "If not specified, uses saved config or auto-detects interactively.",
-)
-def visualize(
-    als_file: Path,
-    output: Path,
-    audio: Path | None,
-    structure_track: str,
-    phrase_bars: int,
-    lyrics: Path | None,
-    vocal_track: tuple[str, ...],
-    all_vocals: bool,
-    transcribe: bool,
-    language: str,
-    whisper_model: str,
-    start_bar: int | None,
-) -> None:
-    """Generate a lyrics/cues visualization video from an Ableton Live Set.
-
-    Creates an MP4 video showing:
-    - Section markers (upper left)
-    - Timecode (upper right)
-    - Lyrics with previous/current/next context (center)
-    - Track enter/exit events (lower area)
-    - Progress bar (bottom)
-
-    The video is rendered at 1280x720 (720p) at 24fps with H.264 encoding.
-
-    EXAMPLES:
-
-        alsmuse visualize song.als -o output.mp4
-
-        alsmuse visualize song.als -o output.mp4 --audio song.wav
-
-        alsmuse visualize song.als -o output.mp4 --lyrics lyrics.lrc
-
-        alsmuse visualize song.als -o output.mp4 --transcribe --audio vocals.wav
-    """
-    # Validate mutual exclusion: --transcribe and --lyrics cannot be used together
-    if transcribe and lyrics is not None:
-        click.echo(
-            "Error: --transcribe and --lyrics are mutually exclusive. Use one or the other.",
-            err=True,
-        )
-        sys.exit(1)
-
-    try:
-        # Load existing config
-        config = load_config(als_file)
-
-        # Determine effective start bar:
-        # 1. CLI argument takes precedence
-        # 2. Fall back to config value
-        # 3. Auto-detect and prompt if interactive
-        effective_start_bar = start_bar
-        start_bar_from_config = config.start_bar if config else None
-
-        if effective_start_bar is None and start_bar_from_config is not None:
-            effective_start_bar = start_bar_from_config
-            click.echo(f"Using saved start bar: {effective_start_bar}")
-
-        # Auto-detect and prompt if still not set and interactive
-        if effective_start_bar is None:
-            live_set = parse_als_file(als_file)
-            suggested = detect_suggested_start_bar(live_set)
-
-            if sys.stdin.isatty() and suggested > 0:
-                # Use rich interactive UI for start bar selection
-                effective_start_bar = select_start_bar_interactive(live_set, suggested)
-
-                # Save the chosen start bar to config
-                updated_config = MuseConfig(
-                    vocal_tracks=config.vocal_tracks if config else [],
-                    category_overrides=config.category_overrides if config else {},
-                    start_bar=effective_start_bar if effective_start_bar else None,
-                )
-                save_config(als_file, updated_config)
-
-        # Show effective start bar if non-zero
-        if effective_start_bar and effective_start_bar > 0:
-            click.echo(f"Using start bar: {effective_start_bar}")
-
-        # Convert bars to beats (assuming 4/4 time)
-        beats_per_phrase = phrase_bars * 4
-
-        # Convert vocal_track tuple to None if empty
-        vocal_tracks = vocal_track if vocal_track else None
-
-        def progress_callback(frame_num: int, total_frames: int) -> None:
-            """Display rendering progress."""
-            if frame_num % 24 == 0 or frame_num == total_frames:
-                percent = (frame_num / total_frames) * 100
-                click.echo(
-                    f"\rRendering: {frame_num}/{total_frames} frames ({percent:.1f}%)", nl=False
-                )
-            if frame_num == total_frames:
-                click.echo()  # Final newline
-
-        result_path = visualize_als(
-            als_path=als_file,
             output_path=output,
             audio_path=audio,
-            structure_track=structure_track,
-            beats_per_phrase=beats_per_phrase,
-            lyrics_path=lyrics,
-            vocal_tracks=vocal_tracks,
-            use_all_vocals=all_vocals,
-            transcribe=transcribe,
-            language=language,
-            model_size=whisper_model,
             progress_callback=progress_callback,
             start_bar=effective_start_bar,
         )
 
-        click.echo(f"Video generated: {result_path}")
+        # Handle output based on result type
+        if isinstance(result, Path):
+            # Video was generated
+            click.echo(f"Video generated: {result}")
+        elif output is not None:
+            # Markdown output to file
+            output.write_text(result)
+            click.echo(f"A/V table saved to: {output}")
+        else:
+            # Markdown output to stdout
+            click.echo(result)
 
     except ParseError as e:
         click.echo(f"Error parsing file: {e}", err=True)

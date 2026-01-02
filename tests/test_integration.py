@@ -788,7 +788,8 @@ class TestCLIOptions:
         result = runner.invoke(analyze, ["--help"])
 
         assert "--output" in result.output or "-o" in result.output
-        assert "markdown table" in result.output.lower()
+        # Help text should mention markdown output format
+        assert "markdown" in result.output.lower()
 
     def test_cli_output_writes_to_file(self, tmp_path: Path) -> None:
         """--output option writes the A/V table to file."""
