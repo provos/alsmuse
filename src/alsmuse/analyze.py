@@ -348,9 +348,7 @@ def align_and_distribute_lyrics(
         )
 
         # Step 5: Reconstruct lines and distribute to phrases
-        original_lines = [
-            line.strip() for line in all_lyrics_text.split("\n") if line.strip()
-        ]
+        original_lines = [line.strip() for line in all_lyrics_text.split("\n") if line.strip()]
         timed_lines = words_to_lines(timed_words, original_lines)
 
         # Validate alignment and warn about issues

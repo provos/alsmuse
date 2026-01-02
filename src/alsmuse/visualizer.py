@@ -281,9 +281,7 @@ def _calculate_text_block_height(
     return len(lines) * line_height
 
 
-def compute_phrase_times(
-    phrases: list[Phrase], time_ctx: TimeContext
-) -> list[tuple[float, float]]:
+def compute_phrase_times(phrases: list[Phrase], time_ctx: TimeContext) -> list[tuple[float, float]]:
     """Compute start and end display times for each phrase.
 
     Times are adjusted using the TimeContext offset, so they start from 0
@@ -424,7 +422,9 @@ def render_frame(state: FrameState, fonts: FontSet) -> Image.Image:
     next_text = _transform_lyrics(state.next_lyric) if state.next_lyric else ""
 
     # Calculate current lyric block height for dynamic positioning
-    current_height = _calculate_text_block_height(current_text, fonts.current_bold) if current_text else 0
+    current_height = (
+        _calculate_text_block_height(current_text, fonts.current_bold) if current_text else 0
+    )
 
     # Previous lyric (dim, above current)
     if prev_text:
@@ -753,9 +753,7 @@ def generate_visualizer(
         RuntimeError: If video generation fails.
     """
     # Filter phrases to only include those at or after start offset
-    filtered_phrases = [
-        p for p in phrases if p.start_beats >= time_ctx.start_offset_beats
-    ]
+    filtered_phrases = [p for p in phrases if p.start_beats >= time_ctx.start_offset_beats]
 
     if not filtered_phrases:
         raise ValueError("No phrases provided for visualization after start_bar filter")

@@ -806,4 +806,3 @@ def segments_to_lines(
             lines.extend(split_lines)
 
     return lines
-

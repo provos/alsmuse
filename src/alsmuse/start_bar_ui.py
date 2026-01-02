@@ -245,7 +245,7 @@ def compute_timeline_config(
     if content_range <= MAX_DISPLAY_BARS:
         # Content fits in window, show it all starting from content_min
         min_bar = max(0, int(content_min_bar))
-        max_bar = min_bar + min(content_range, MAX_DISPLAY_BARS)
+        max_bar = min_bar + int(min(content_range, MAX_DISPLAY_BARS))
     else:
         # Content is larger than window, center on suggested bar
         # Show suggested bar roughly 1/4 from the left
@@ -789,9 +789,8 @@ def _interactive_select(
     sys.stdout.flush()
 
     # Cursor is at end of help line
-    # indicator is 2 lines up, label is 1 line up
+    # indicator is 2 lines up
     indicator_offset = 2
-    label_offset = 1
 
     try:
         with _raw_terminal():
