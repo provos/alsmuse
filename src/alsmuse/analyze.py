@@ -595,7 +595,6 @@ def transcribe_and_distribute_lyrics(
         # Step 4 & 5: Transcribe and filter to valid ranges
         segments, raw_text = transcribe_lyrics(
             combined_path,
-            valid_ranges=valid_ranges,
             language=language,
             model_size=model_size,
         )

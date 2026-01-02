@@ -20,7 +20,7 @@ Key Functions:
     - align_lyrics: Force-align lyrics text to audio with word-level timing.
     - transcribe_lyrics: Transcribe lyrics from audio using Whisper ASR.
     - segments_to_lines: Convert transcribed segments to displayable lines.
-    - filter_to_valid_ranges: Remove hallucinated words outside vocal regions.
+    - clip_words_to_valid_ranges: Filter hallucinations and clip stretched boundaries.
     - filter_segments_to_valid_ranges: Remove hallucinated segments.
     - words_to_lines: Reconstruct original line structure from word timestamps.
 """
@@ -71,14 +71,23 @@ def get_compute_device() -> str:
     return "cpu"
 
 
-def filter_to_valid_ranges(
+def clip_words_to_valid_ranges(
     words: list[TimedWord],
     valid_ranges: list[tuple[float, float]],
 ) -> list[TimedWord]:
-    """Remove words that fall outside known audio regions.
+    """Filter words and clip their boundaries to valid audio regions.
 
-    A word is kept if its midpoint falls within any valid range.
-    This filters out Whisper hallucinations during silent gaps.
+    stable-ts forced alignment stretches word boundaries to fill silence
+    gaps. A word like "Deep" sung at 52.5s might get assigned start=50.2s
+    to fill the silence after the previous word. This function:
+
+    1. Finds the valid range containing the word's end time (which is more
+       accurate than start for stretched words)
+    2. Clips word boundaries to that valid range
+    3. Filters out words that don't overlap any valid range
+
+    The end time is used for matching because stable-ts stretches words
+    backwards (adjusting start earlier) but keeps end times accurate.
 
     Args:
         words: All words from alignment.
@@ -86,16 +95,60 @@ def filter_to_valid_ranges(
             (start_seconds, end_seconds) tuples.
 
     Returns:
-        Filtered list with hallucinations removed.
+        Filtered list with word boundaries clipped to valid audio regions.
     """
     if not valid_ranges:
         return words
 
-    def is_in_valid_range(word: TimedWord) -> bool:
-        midpoint = (word.start + word.end) / 2
-        return any(start <= midpoint <= end for start, end in valid_ranges)
+    # Sort ranges by start time for efficient lookup
+    sorted_ranges = sorted(valid_ranges, key=lambda r: r[0])
 
-    return [w for w in words if is_in_valid_range(w)]
+    def find_range_for_word(word: TimedWord) -> tuple[float, float] | None:
+        """Find the valid range that contains the word's end time.
+
+        For stretched words, the end time is accurate (when the word actually
+        ends being sung), while start may be stretched backwards into silence.
+        """
+        # First try: find range containing the end time
+        for start, end in sorted_ranges:
+            if start <= word.end <= end:
+                return (start, end)
+
+        # Fallback: find range containing the midpoint (for normal words)
+        midpoint = (word.start + word.end) / 2
+        for start, end in sorted_ranges:
+            if start <= midpoint <= end:
+                return (start, end)
+
+        return None
+
+    result: list[TimedWord] = []
+    for word in words:
+        # Find the valid range for this word
+        containing_range = find_range_for_word(word)
+        if containing_range is None:
+            # Word doesn't overlap any valid range, skip it
+            continue
+
+        range_start, range_end = containing_range
+
+        # Clip word boundaries to the valid range
+        new_start = max(word.start, range_start)
+        new_end = min(word.end, range_end)
+
+        # Only create new TimedWord if boundaries changed
+        if new_start != word.start or new_end != word.end:
+            result.append(
+                TimedWord(
+                    text=word.text,
+                    start=new_start,
+                    end=new_end,
+                )
+            )
+        else:
+            result.append(word)
+
+    return result
 
 
 def _normalize_text(text: str) -> str:
@@ -321,8 +374,13 @@ def align_lyrics(
 ) -> list[TimedWord]:
     """Force-align lyrics to audio, filtering hallucinations.
 
-    Uses stable-ts for alignment, then filters results to only include
-    words that fall within known valid audio ranges.
+    Uses stable-ts for alignment, then:
+    1. Filters out words that fall outside known valid audio ranges
+    2. Clips word boundaries to valid ranges to fix stretched timestamps
+
+    stable-ts stretches word boundaries to fill silence gaps. A word sung
+    at 52.5s might get start=50.2s to fill the gap after the previous word.
+    This function clips such stretched boundaries to when audio actually exists.
 
     Args:
         audio_path: Path to combined vocal audio.
@@ -332,7 +390,7 @@ def align_lyrics(
         model_size: Whisper model size ("tiny", "base", "small", "medium").
 
     Returns:
-        List of TimedWord with hallucinations removed.
+        List of TimedWord with hallucinations removed and boundaries clipped.
 
     Raises:
         AlignmentError: If alignment fails.
@@ -370,8 +428,8 @@ def align_lyrics(
                     )
                 )
 
-    # Filter to valid ranges only
-    filtered_words = filter_to_valid_ranges(all_words, valid_ranges)
+    # Filter hallucinations and clip stretched word boundaries to valid ranges
+    filtered_words = clip_words_to_valid_ranges(all_words, valid_ranges)
 
     return filtered_words
 
@@ -569,7 +627,6 @@ def _transcribe_single_segment(
 
 def transcribe_lyrics(
     audio_path: Path,
-    valid_ranges: list[tuple[float, float]],  # Not used with segment-based approach
     language: str = "en",
     model_size: str = "base",
     segment_dir: Path | None = None,

@@ -1012,7 +1012,6 @@ class TestLanguageAndModelPassing:
             # Call transcribe_lyrics with Spanish language
             lyrics_align.transcribe_lyrics(
                 audio_path=Path("/fake/audio.wav"),
-                valid_ranges=[(0.0, 10.0)],
                 language="es",  # Spanish
                 model_size="base",
             )
@@ -1063,7 +1062,6 @@ class TestLanguageAndModelPassing:
             # Call transcribe_lyrics with medium model
             lyrics_align.transcribe_lyrics(
                 audio_path=Path("/fake/audio.wav"),
-                valid_ranges=[(0.0, 10.0)],
                 language="en",
                 model_size="medium",  # Medium model
             )

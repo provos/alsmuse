@@ -459,6 +459,99 @@ def get_unique_vocal_track_names(clips: list[AudioClipRef]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _apply_compression(
+    audio: np.ndarray,
+    sample_rate: int,
+    threshold_db: float = -20.0,
+    ratio: float = 4.0,
+    attack_ms: float = 10.0,
+    release_ms: float = 200.0,
+) -> np.ndarray:
+    """Apply dynamic range compression to audio.
+
+    Uses an envelope follower with attack/release to compute gain reduction,
+    then applies makeup gain to bring the overall level up.
+
+    Args:
+        audio: Audio samples as numpy array (mono or stereo).
+        sample_rate: Sample rate of the audio.
+        threshold_db: Level (in dB) above which compression starts.
+        ratio: Compression ratio (e.g., 4.0 means 4:1 compression).
+        attack_ms: Attack time in milliseconds (how fast compression engages).
+        release_ms: Release time in milliseconds (how fast compression releases).
+
+    Returns:
+        Compressed audio as numpy array (same shape as input).
+    """
+    if len(audio) == 0:
+        return audio
+
+    # Convert to mono for envelope detection, preserve original for processing
+    mono = audio.mean(axis=1) if audio.ndim > 1 else audio
+
+    # Convert threshold to linear
+    threshold_linear = 10 ** (threshold_db / 20)
+
+    # Calculate attack and release coefficients
+    # These determine how fast the envelope follower responds
+    attack_samples = int(attack_ms * sample_rate / 1000)
+    release_samples = int(release_ms * sample_rate / 1000)
+
+    # Coefficients for exponential smoothing
+    attack_coef = np.exp(-1.0 / max(attack_samples, 1))
+    release_coef = np.exp(-1.0 / max(release_samples, 1))
+
+    # Get absolute values for envelope detection
+    abs_audio = np.abs(mono)
+
+    # Compute envelope using attack/release follower
+    envelope = np.zeros(len(mono), dtype=np.float32)
+    env_value = 0.0
+
+    for i in range(len(mono)):
+        input_level = abs_audio[i]
+        if input_level > env_value:
+            # Attack: envelope rises toward input
+            env_value = attack_coef * env_value + (1 - attack_coef) * input_level
+        else:
+            # Release: envelope falls toward input
+            env_value = release_coef * env_value + (1 - release_coef) * input_level
+        envelope[i] = env_value
+
+    # Compute gain reduction based on envelope
+    # For levels above threshold, apply compression ratio
+    gain = np.ones(len(mono), dtype=np.float32)
+
+    above_threshold = envelope > threshold_linear
+    if np.any(above_threshold):
+        # Convert to dB for compression calculation
+        # Use maximum to avoid log10(0) warning
+        envelope_db = 20 * np.log10(np.maximum(envelope, 1e-10))
+
+        # Calculate gain reduction in dB
+        # For signal X dB above threshold, output is threshold + (X / ratio)
+        overshoot_db = np.maximum(0, envelope_db - threshold_db)
+        gain_reduction_db = overshoot_db * (1 - 1 / ratio)
+
+        # Convert back to linear gain
+        gain = (10 ** (-gain_reduction_db / 20)).astype(np.float32)
+
+    # Apply gain to audio
+    compressed = audio * gain[:, np.newaxis] if audio.ndim > 1 else audio * gain
+
+    # Calculate makeup gain to bring level up
+    # Target peak at -3 dB
+    target_peak_db = -3.0
+    target_peak_linear = 10 ** (target_peak_db / 20)
+
+    current_peak = np.abs(compressed).max()
+    if current_peak > 1e-10:
+        makeup_gain = target_peak_linear / current_peak
+        compressed = compressed * makeup_gain
+
+    return compressed.astype(np.float32)
+
+
 def _get_target_sample_rate(clips: list[AudioClipRef]) -> int:
     """Determine the target sample rate (most common among clips).
 
@@ -617,13 +710,20 @@ def combine_clips_to_audio(
             # Mix into combined buffer (additive for overlapping clips)
             combined[start_sample : start_sample + clip_samples] += audio[:clip_samples]
 
-        # Record valid range
-        valid_ranges.append((clip.start_seconds, clip.end_seconds))
+        # Detect non-silent regions within this clip and add with timeline offset
+        # This catches silences within clips (pauses between phrases)
+        clip_ranges = _detect_non_silent_ranges_from_array(
+            audio[:clip_samples],
+            sample_rate,
+            min_silence_duration=2.0,  # 2s silence = gap between phrases
+            silence_threshold_db=-40.0,
+            time_offset=clip.start_seconds,
+        )
+        valid_ranges.extend(clip_ranges)
 
-    # Normalize to prevent clipping if peaks exceed 1.0
-    peak = np.abs(combined).max()
-    if peak > 1.0:
-        combined /= peak
+    # Apply compression to increase volume and limit dynamic range
+    # This helps with transcription by making quiet passages more audible
+    combined = _apply_compression(combined, sample_rate)
 
     # Export as WAV
     sf.write(str(output_path), combined, sample_rate)
@@ -748,6 +848,140 @@ def split_audio_on_silence(
         result.append((segment_path, start_time, end_time))
 
     return result
+
+
+def _detect_non_silent_ranges_from_array(
+    audio: np.ndarray,
+    sample_rate: int,
+    min_silence_duration: float = 0.5,
+    silence_threshold_db: float = -40.0,
+    time_offset: float = 0.0,
+) -> list[tuple[float, float]]:
+    """Detect non-silent time ranges in an audio array.
+
+    Args:
+        audio: Audio samples as numpy array (mono or stereo).
+        sample_rate: Sample rate of the audio.
+        min_silence_duration: Minimum silence duration (seconds) to count as a gap.
+        silence_threshold_db: Audio level below this (in dB) is considered silence.
+        time_offset: Offset to add to all returned times (for timeline positioning).
+
+    Returns:
+        List of (start_seconds, end_seconds) tuples for non-silent regions.
+    """
+    # Convert to mono for silence detection
+    mono = audio.mean(axis=1) if audio.ndim > 1 else audio
+
+    # Handle empty audio
+    if len(mono) == 0:
+        return []
+
+    # Convert threshold from dB to linear amplitude
+    silence_threshold = 10 ** (silence_threshold_db / 20)
+
+    # Calculate RMS energy in short windows
+    window_size = int(0.05 * sample_rate)  # 50ms windows
+    hop_size = window_size // 2
+
+    # Ensure window_size is at least 1
+    if window_size < 1:
+        return [(time_offset, time_offset + len(mono) / sample_rate)]
+
+    # Pad audio to ensure we can process all samples
+    padded = np.pad(mono, (0, window_size))
+
+    # Calculate RMS for each window
+    num_windows = (len(padded) - window_size) // hop_size + 1
+    rms = np.zeros(num_windows)
+    for i in range(num_windows):
+        start = i * hop_size
+        window = padded[start : start + window_size]
+        rms[i] = np.sqrt(np.mean(window**2))
+
+    # Find silent regions (RMS below threshold)
+    is_silent = rms < silence_threshold
+
+    # Convert min_silence_duration to windows
+    min_silence_windows = int(min_silence_duration * sample_rate / hop_size)
+
+    # Find contiguous silent regions
+    silent_regions: list[tuple[int, int]] = []
+    in_silence = False
+    silence_start = 0
+
+    for i, silent in enumerate(is_silent):
+        if silent and not in_silence:
+            silence_start = i
+            in_silence = True
+        elif not silent and in_silence:
+            if i - silence_start >= min_silence_windows:
+                silent_regions.append((silence_start, i))
+            in_silence = False
+
+    # Handle trailing silence
+    if in_silence and len(is_silent) - silence_start >= min_silence_windows:
+        silent_regions.append((silence_start, len(is_silent)))
+
+    # Convert window indices to sample indices
+    def window_to_sample(w: int) -> int:
+        return w * hop_size
+
+    # Build segment boundaries (non-silent regions)
+    segments: list[tuple[int, int]] = []
+    prev_end = 0
+
+    for silence_start_w, silence_end_w in silent_regions:
+        segment_start = prev_end
+        segment_end = window_to_sample(silence_start_w)
+
+        if segment_end > segment_start:
+            segments.append((segment_start, segment_end))
+
+        prev_end = window_to_sample(silence_end_w)
+
+    # Add final segment if there's audio after last silence
+    if prev_end < len(mono):
+        segments.append((prev_end, len(mono)))
+
+    # If no silence detected, use entire file as one segment
+    if not segments:
+        segments = [(0, len(mono))]
+
+    # Convert to seconds with offset (no filtering - all non-silent regions are valid)
+    result: list[tuple[float, float]] = []
+    for start_sample, end_sample in segments:
+        result.append(
+            (time_offset + start_sample / sample_rate, time_offset + end_sample / sample_rate)
+        )
+
+    return result
+
+
+def detect_non_silent_ranges(
+    audio_path: Path,
+    min_silence_duration: float = 0.5,
+    silence_threshold_db: float = -40.0,
+) -> list[tuple[float, float]]:
+    """Detect non-silent time ranges in an audio file.
+
+    Wrapper around _detect_non_silent_ranges_from_array that reads from a file.
+
+    Args:
+        audio_path: Path to the audio file to analyze.
+        min_silence_duration: Minimum silence duration (seconds) to count as a gap.
+        silence_threshold_db: Audio level below this (in dB) is considered silence.
+
+    Returns:
+        List of (start_seconds, end_seconds) tuples for non-silent regions.
+    """
+    audio, sample_rate = sf.read(str(audio_path), dtype="float32")
+    return _detect_non_silent_ranges_from_array(
+        audio,
+        sample_rate,
+        min_silence_duration=min_silence_duration,
+        silence_threshold_db=silence_threshold_db,
+        time_offset=0.0,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -260,7 +260,6 @@ def _transcribe_and_distribute_lyrics(
 
         segments, raw_text = transcribe_lyrics(
             combined_path,
-            valid_ranges=valid_ranges,
             language=language,
             model_size=model_size,
         )

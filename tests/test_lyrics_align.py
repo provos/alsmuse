@@ -9,8 +9,8 @@ from alsmuse.exceptions import AlignmentError
 from alsmuse.lyrics_align import (
     _normalize_text,
     _tokenize,
+    clip_words_to_valid_ranges,
     filter_segments_to_valid_ranges,
-    filter_to_valid_ranges,
     segments_to_lines,
     words_to_lines,
 )
@@ -80,102 +80,121 @@ class TestGetComputeDevice:
 
 
 # ---------------------------------------------------------------------------
-# Tests for filter_to_valid_ranges
+# Tests for clip_words_to_valid_ranges
 # ---------------------------------------------------------------------------
 
 
-class TestFilterToValidRanges:
-    """Tests for filter_to_valid_ranges function."""
+class TestClipWordsToValidRanges:
+    """Tests for clip_words_to_valid_ranges function."""
 
     def test_empty_words_returns_empty(self) -> None:
         """Empty word list returns empty list."""
-        result = filter_to_valid_ranges([], [(0.0, 10.0)])
+        result = clip_words_to_valid_ranges([], [(0.0, 10.0)])
         assert result == []
 
     def test_empty_ranges_returns_all_words(self) -> None:
-        """Empty valid_ranges returns all words."""
+        """Empty valid_ranges returns all words unchanged."""
         words = [
             TimedWord(text="hello", start=0.0, end=0.5),
             TimedWord(text="world", start=0.5, end=1.0),
         ]
-        result = filter_to_valid_ranges(words, [])
+        result = clip_words_to_valid_ranges(words, [])
         assert result == words
 
-    def test_word_inside_range_is_kept(self) -> None:
-        """Word whose midpoint is inside a valid range is kept."""
+    def test_word_fully_inside_range_unchanged(self) -> None:
+        """Word fully inside a valid range is not modified."""
         words = [
-            TimedWord(text="hello", start=1.0, end=2.0),  # midpoint = 1.5
+            TimedWord(text="hello", start=1.0, end=2.0),
         ]
-        result = filter_to_valid_ranges(words, [(0.0, 3.0)])
+        result = clip_words_to_valid_ranges(words, [(0.0, 3.0)])
         assert len(result) == 1
-        assert result[0].text == "hello"
+        assert result[0].start == 1.0
+        assert result[0].end == 2.0
 
     def test_word_outside_range_is_filtered(self) -> None:
         """Word whose midpoint is outside valid ranges is filtered."""
         words = [
             TimedWord(text="hello", start=5.0, end=6.0),  # midpoint = 5.5
         ]
-        result = filter_to_valid_ranges(words, [(0.0, 3.0)])
+        result = clip_words_to_valid_ranges(words, [(0.0, 3.0)])
         assert result == []
 
-    def test_word_at_range_boundary_is_kept(self) -> None:
-        """Word whose midpoint is exactly at range boundary is kept."""
+    def test_word_start_clipped_to_range_start(self) -> None:
+        """Word with start before range is clipped to range start."""
+        # Simulates stable-ts stretching "Deep" backwards to fill silence
         words = [
-            TimedWord(text="hello", start=2.0, end=4.0),  # midpoint = 3.0
+            TimedWord(text="Deep", start=50.0, end=52.5),  # midpoint = 51.25, in range
         ]
-        result = filter_to_valid_ranges(words, [(0.0, 3.0)])
+        # Valid audio starts at 52.0
+        result = clip_words_to_valid_ranges(words, [(52.0, 55.0)])
         assert len(result) == 1
+        assert result[0].text == "Deep"
+        assert result[0].start == 52.0  # Clipped to range start
+        assert result[0].end == 52.5  # End unchanged (already in range)
 
-    def test_multiple_ranges_checked(self) -> None:
-        """Words in any of multiple valid ranges are kept."""
+    def test_word_end_clipped_to_range_end(self) -> None:
+        """Word with end after range is clipped to range end."""
         words = [
-            TimedWord(text="first", start=0.5, end=1.5),  # midpoint = 1.0, in range 1
-            TimedWord(text="gap", start=3.0, end=4.0),  # midpoint = 3.5, not in any range
-            TimedWord(text="second", start=5.5, end=6.5),  # midpoint = 6.0, in range 2
+            TimedWord(text="word", start=9.5, end=11.0),  # midpoint = 10.25
         ]
-        result = filter_to_valid_ranges(words, [(0.0, 2.0), (5.0, 7.0)])
+        # Range ends at 10.5, word ends at 11.0
+        result = clip_words_to_valid_ranges(words, [(9.0, 10.5)])
+        assert len(result) == 1
+        assert result[0].start == 9.5  # Start unchanged
+        assert result[0].end == 10.5  # Clipped to range end
 
+    def test_word_both_boundaries_clipped(self) -> None:
+        """Word with both boundaries outside range gets both clipped."""
+        words = [
+            TimedWord(text="stretched", start=4.0, end=7.0),  # midpoint = 5.5, in range
+        ]
+        result = clip_words_to_valid_ranges(words, [(5.0, 6.0)])
+        assert len(result) == 1
+        assert result[0].start == 5.0  # Clipped to range start
+        assert result[0].end == 6.0  # Clipped to range end
+
+    def test_realistic_stretched_word_scenario(self) -> None:
+        """Simulates the 'Deep Inside Me' bug: word stretched to fill silence gap."""
+        # Before: "believe" ends at 50.26s
+        # After: silence gap until 52.4s when "Deep" is actually sung
+        # stable-ts assigns: Deep start=50.26s, end=52.54s (stretches into gap)
+        words = [
+            TimedWord(text="believe", start=49.78, end=50.26),
+            TimedWord(text="Deep", start=50.26, end=52.54),  # Stretched!
+            TimedWord(text="Inside", start=52.66, end=53.38),
+            TimedWord(text="Me", start=53.48, end=54.08),
+        ]
+        # Valid ranges: "believe" clip ends at 50.3, "Deep Inside Me" clip starts at 52.4
+        valid_ranges = [(49.0, 50.3), (52.4, 55.0)]
+
+        result = clip_words_to_valid_ranges(words, valid_ranges)
+
+        assert len(result) == 4
+        # "believe" unchanged (fully in first range)
+        assert result[0].text == "believe"
+        assert result[0].start == 49.78
+        assert result[0].end == 50.26
+
+        # "Deep" should be clipped: start adjusted from 50.26 to 52.4
+        assert result[1].text == "Deep"
+        assert result[1].start == 52.4  # Clipped to second range start
+        assert result[1].end == 52.54  # End unchanged
+
+        # "Inside" and "Me" unchanged
+        assert result[2].text == "Inside"
+        assert result[3].text == "Me"
+
+    def test_multiple_ranges_sorted(self) -> None:
+        """Ranges are sorted by start time for correct lookup."""
+        words = [
+            TimedWord(text="early", start=0.5, end=1.5),
+            TimedWord(text="late", start=9.5, end=10.5),
+        ]
+        # Ranges given out of order
+        result = clip_words_to_valid_ranges(words, [(9.0, 11.0), (0.0, 2.0)])
         assert len(result) == 2
-        assert result[0].text == "first"
-        assert result[1].text == "second"
-
-    def test_overlapping_ranges(self) -> None:
-        """Words in overlapping ranges are kept (not duplicated)."""
-        words = [
-            TimedWord(text="overlap", start=1.0, end=2.0),  # midpoint = 1.5
-        ]
-        result = filter_to_valid_ranges(words, [(0.0, 2.0), (1.0, 3.0)])
-        assert len(result) == 1
-
-    def test_word_spanning_range_boundary(self) -> None:
-        """Word that spans a range boundary is filtered based on midpoint."""
-        words = [
-            TimedWord(text="spanning", start=2.5, end=3.5),  # midpoint = 3.0, at boundary
-        ]
-        # Range ends at 3.0, midpoint is exactly 3.0, should be kept
-        result = filter_to_valid_ranges(words, [(0.0, 3.0)])
-        assert len(result) == 1
-
-    def test_realistic_hallucination_filtering(self) -> None:
-        """Simulates filtering hallucinations from silent gaps."""
-        # Simulate aligned words with some in silent gaps
-        words = [
-            # Real vocals: 0-10s
-            TimedWord(text="hello", start=1.0, end=1.5),
-            TimedWord(text="world", start=1.6, end=2.0),
-            # Hallucination in gap: 10-20s (model imagined words)
-            TimedWord(text="phantom", start=15.0, end=15.5),
-            TimedWord(text="words", start=15.6, end=16.0),
-            # Real vocals: 20-30s
-            TimedWord(text="goodbye", start=21.0, end=21.5),
-        ]
-        valid_ranges = [(0.0, 10.0), (20.0, 30.0)]
-
-        result = filter_to_valid_ranges(words, valid_ranges)
-
-        assert len(result) == 3
-        texts = [w.text for w in result]
-        assert texts == ["hello", "world", "goodbye"]
+        assert result[0].text == "early"
+        assert result[1].text == "late"
 
 
 # ---------------------------------------------------------------------------
@@ -1008,7 +1027,6 @@ class TestTranscribeLyrics:
 
             segments, raw_text = lyrics_align.transcribe_lyrics(
                 audio_path=Path("/fake/audio.wav"),
-                valid_ranges=[(0.0, 10.0)],
             )
 
         assert len(segments) == 1
@@ -1062,7 +1080,6 @@ class TestTranscribeLyrics:
 
             segments, raw_text = lyrics_align.transcribe_lyrics(
                 audio_path=Path("/fake/audio.wav"),
-                valid_ranges=[],
             )
 
         assert len(segments) == 2
@@ -1080,7 +1097,6 @@ class TestTranscribeLyrics:
 
             segments, raw_text = lyrics_align.transcribe_lyrics(
                 audio_path=Path("/fake/audio.wav"),
-                valid_ranges=[(0.0, 10.0)],
             )
 
         assert segments == []
@@ -1129,7 +1145,6 @@ class TestTranscribeLyrics:
 
             segments, _ = lyrics_align.transcribe_lyrics(
                 audio_path=Path("/fake/audio.wav"),
-                valid_ranges=[],
             )
 
         # Should be sorted by start time
@@ -1155,5 +1170,4 @@ class TestTranscribeLyrics:
             with pytest.raises(AlignmentError, match="Transcription failed"):
                 lyrics_align.transcribe_lyrics(
                     audio_path=Path("/fake/audio.wav"),
-                    valid_ranges=[(0.0, 10.0)],
                 )
