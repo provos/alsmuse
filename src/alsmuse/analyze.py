@@ -62,6 +62,37 @@ from .phrases import subdivide_sections
 logger = logging.getLogger(__name__)
 
 
+def detect_suggested_start_bar(live_set: LiveSet) -> int:
+    """Detect the earliest bar where any clip begins.
+
+    Analyzes all enabled tracks to find the minimum clip start position,
+    then converts to a bar number. This helps identify where the actual
+    music starts in projects where content doesn't begin at bar 0.
+
+    Args:
+        live_set: Parsed LiveSet containing tracks and tempo info.
+
+    Returns:
+        Bar number (0-indexed) where first activity occurs.
+        Returns 0 if no clips are found or clips start at beat 0.
+    """
+    min_beat = float("inf")
+
+    for track in live_set.enabled_tracks():
+        for clip in track.clips:
+            if clip.start_beats < min_beat:
+                min_beat = clip.start_beats
+
+    if min_beat == float("inf"):
+        return 0
+
+    # Convert to bars using time signature
+    numerator, denominator = live_set.tempo.time_signature
+    beats_per_bar = numerator * (4 / denominator)
+
+    return int(min_beat // beats_per_bar)
+
+
 def analyze_als(
     als_path: Path,
     structure_track: str = "STRUCTURE",

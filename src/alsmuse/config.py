@@ -30,19 +30,25 @@ class MuseConfig:
             The category values should match keys in TRACK_CATEGORIES
             (e.g., "drums", "bass", "vocals", "lead", "guitar", "keys", "pad", "fx")
             or "other" to exclude from event detection.
+        start_bar: Bar number where the song starts (for time offset).
+            If None, times are shown from bar 0.
     """
 
     version: int = CONFIG_VERSION
     vocal_tracks: list[str] = field(default_factory=list)
     category_overrides: dict[str, str] = field(default_factory=dict)
+    start_bar: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        return {
+        result: dict[str, Any] = {
             "version": self.version,
             "vocal_tracks": self.vocal_tracks,
             "category_overrides": self.category_overrides,
         }
+        if self.start_bar is not None:
+            result["start_bar"] = self.start_bar
+        return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> MuseConfig:
@@ -63,6 +69,7 @@ class MuseConfig:
             version=data.get("version", CONFIG_VERSION),
             vocal_tracks=data.get("vocal_tracks", []),
             category_overrides=data.get("category_overrides", {}),
+            start_bar=data.get("start_bar"),
         )
 
 

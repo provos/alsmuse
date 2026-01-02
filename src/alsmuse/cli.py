@@ -10,8 +10,11 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 import click
 
-from .analyze import analyze_als
+from .analyze import analyze_als, detect_suggested_start_bar
+from .config import MuseConfig, load_config, save_config
 from .exceptions import ParseError, TrackNotFoundError
+from .parser import parse_als_file
+from .start_bar_ui import select_start_bar_interactive
 from .visualize import visualize_als
 
 
@@ -102,6 +105,13 @@ def main() -> None:
     default=None,
     help="Save the A/V markdown table to this file instead of printing to stdout.",
 )
+@click.option(
+    "--start-bar",
+    type=int,
+    default=None,
+    help="Bar number where the song starts (times will be relative to this bar). "
+    "If not specified, auto-detects and prompts interactively. Saved to config.",
+)
 def analyze(
     als_file: Path,
     structure_track: str,
@@ -117,6 +127,7 @@ def analyze(
     whisper_model: str,
     save_lyrics: Path | None,
     output: Path | None,
+    start_bar: int | None,
 ) -> None:
     """Analyze an Ableton Live Set file.
 
@@ -170,11 +181,55 @@ def analyze(
         sys.exit(1)
 
     try:
+        # Load existing config
+        config = load_config(als_file)
+
+        # Determine effective start bar:
+        # 1. CLI argument takes precedence
+        # 2. Fall back to config value
+        # 3. Auto-detect and prompt if interactive
+        effective_start_bar = start_bar
+        start_bar_from_config = config.start_bar if config else None
+
+        if effective_start_bar is None and start_bar_from_config is not None:
+            effective_start_bar = start_bar_from_config
+            click.echo(f"Using saved start bar: {effective_start_bar}")
+
+        # Auto-detect and prompt if still not set and interactive
+        if effective_start_bar is None:
+            live_set = parse_als_file(als_file)
+            suggested = detect_suggested_start_bar(live_set)
+
+            if sys.stdin.isatty() and suggested > 0:
+                # Use rich interactive UI for start bar selection
+                effective_start_bar = select_start_bar_interactive(live_set, suggested)
+
+                # Save the chosen start bar to config
+                updated_config = MuseConfig(
+                    vocal_tracks=config.vocal_tracks if config else [],
+                    category_overrides=config.category_overrides if config else {},
+                    start_bar=effective_start_bar if effective_start_bar else None,
+                )
+                save_config(als_file, updated_config)
+            elif suggested > 0:
+                # Non-interactive but suggested start is non-zero
+                click.echo(
+                    f"Note: Song appears to start at bar {suggested}. "
+                    f"Use --start-bar {suggested} to adjust times.",
+                    err=True,
+                )
+
         # Convert bars to beats (assuming 4/4 time)
         beats_per_phrase = phrase_bars * 4
 
         # Convert vocal_track tuple to None if empty
         vocal_tracks = vocal_track if vocal_track else None
+
+        # Show effective start bar if non-zero
+        if effective_start_bar and effective_start_bar > 0:
+            click.echo(
+                f"Using start bar: {effective_start_bar} (times relative to bar {effective_start_bar})"
+            )
 
         result = analyze_als(
             als_file,
@@ -190,6 +245,7 @@ def analyze(
             save_lyrics_path=save_lyrics,
             language=language,
             model_size=whisper_model,
+            start_bar=effective_start_bar,
         )
 
         if output is not None:
@@ -265,6 +321,13 @@ def analyze(
     default="base",
     help="Whisper model size for transcription/alignment (default: base).",
 )
+@click.option(
+    "--start-bar",
+    type=int,
+    default=None,
+    help="Bar number where the song starts (times will be relative to this bar). "
+    "If not specified, uses saved config or auto-detects interactively.",
+)
 def visualize(
     als_file: Path,
     output: Path,
@@ -277,6 +340,7 @@ def visualize(
     transcribe: bool,
     language: str,
     whisper_model: str,
+    start_bar: int | None,
 ) -> None:
     """Generate a lyrics/cues visualization video from an Ableton Live Set.
 
@@ -308,6 +372,41 @@ def visualize(
         sys.exit(1)
 
     try:
+        # Load existing config
+        config = load_config(als_file)
+
+        # Determine effective start bar:
+        # 1. CLI argument takes precedence
+        # 2. Fall back to config value
+        # 3. Auto-detect and prompt if interactive
+        effective_start_bar = start_bar
+        start_bar_from_config = config.start_bar if config else None
+
+        if effective_start_bar is None and start_bar_from_config is not None:
+            effective_start_bar = start_bar_from_config
+            click.echo(f"Using saved start bar: {effective_start_bar}")
+
+        # Auto-detect and prompt if still not set and interactive
+        if effective_start_bar is None:
+            live_set = parse_als_file(als_file)
+            suggested = detect_suggested_start_bar(live_set)
+
+            if sys.stdin.isatty() and suggested > 0:
+                # Use rich interactive UI for start bar selection
+                effective_start_bar = select_start_bar_interactive(live_set, suggested)
+
+                # Save the chosen start bar to config
+                updated_config = MuseConfig(
+                    vocal_tracks=config.vocal_tracks if config else [],
+                    category_overrides=config.category_overrides if config else {},
+                    start_bar=effective_start_bar if effective_start_bar else None,
+                )
+                save_config(als_file, updated_config)
+
+        # Show effective start bar if non-zero
+        if effective_start_bar and effective_start_bar > 0:
+            click.echo(f"Using start bar: {effective_start_bar}")
+
         # Convert bars to beats (assuming 4/4 time)
         beats_per_phrase = phrase_bars * 4
 
@@ -337,6 +436,7 @@ def visualize(
             language=language,
             model_size=whisper_model,
             progress_callback=progress_callback,
+            start_bar=effective_start_bar,
         )
 
         click.echo(f"Video generated: {result_path}")
