@@ -83,7 +83,7 @@ def main() -> None:
 )
 @click.option(
     "--whisper-model",
-    type=click.Choice(["tiny", "base", "small", "medium", "large"]),
+    type=click.Choice(["tiny", "base", "small", "medium", "large", "large-v3"]),
     default="base",
     help="Whisper model size for transcription/alignment (default: base).",
 )
@@ -261,7 +261,7 @@ def analyze(
 )
 @click.option(
     "--whisper-model",
-    type=click.Choice(["tiny", "base", "small", "medium", "large"]),
+    type=click.Choice(["tiny", "base", "small", "medium", "large", "large-v3"]),
     default="base",
     help="Whisper model size for transcription/alignment (default: base).",
 )

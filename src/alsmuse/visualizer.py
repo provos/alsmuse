@@ -523,6 +523,7 @@ def encode_video_with_ffmpeg(
         )
 
     # Build ffmpeg command
+    # Note: All inputs must come before output options
     cmd = [
         ffmpeg_path,
         "-y",  # Overwrite output
@@ -530,17 +531,25 @@ def encode_video_with_ffmpeg(
         str(FRAME_RATE),
         "-i",
         str(frames_dir / "frame_%06d.png"),
+    ]
+
+    # Add audio input if provided (must come before output options)
+    if audio_path is not None:
+        cmd.extend(["-i", str(audio_path)])
+
+    # Output options (after all inputs)
+    cmd.extend([
         "-c:v",
         "libx264",
         "-crf",
         str(VIDEO_CRF),
         "-pix_fmt",
         "yuv420p",  # Compatibility
-    ]
+    ])
 
-    # Add audio if provided
+    # Add audio output options if audio was provided
     if audio_path is not None:
-        cmd.extend(["-i", str(audio_path), "-c:a", "aac", "-b:a", "192k", "-shortest"])
+        cmd.extend(["-c:a", "aac", "-b:a", "192k", "-shortest"])
 
     cmd.append(str(output_path))
 

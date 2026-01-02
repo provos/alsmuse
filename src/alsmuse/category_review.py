@@ -238,14 +238,10 @@ def review_categories_interactive(
         ]
 
         # Display category table
-        _display_category_table(
-            track_names, working_categories, categories_with_tracks, console
-        )
+        _display_category_table(track_names, working_categories, categories_with_tracks, console)
         console.print("[dim]Enter category number to review, or press Enter when done[/]")
 
-        cat_choice = _prompt_selection(
-            console, "Category #", len(categories_with_tracks)
-        )
+        cat_choice = _prompt_selection(console, "Category #", len(categories_with_tracks))
 
         if cat_choice is None:
             break
@@ -262,11 +258,11 @@ def review_categories_interactive(
 
         # Display tracks table
         _display_tracks_table(tracks_in_category, selected_category, console)
-        console.print("[dim]Enter track numbers to reassign (e.g., 1,3,5 or 1-3), or Enter to go back[/]")
-
-        track_choices = _prompt_multi_selection(
-            console, "Track #", len(tracks_in_category)
+        console.print(
+            "[dim]Enter track numbers to reassign (e.g., 1,3,5 or 1-3), or Enter to go back[/]"
         )
+
+        track_choices = _prompt_multi_selection(console, "Track #", len(tracks_in_category))
 
         if track_choices is None:
             continue
@@ -294,9 +290,7 @@ def review_categories_interactive(
         console.print(table)
         console.print("[dim]Enter category number for new assignment, or press Enter to cancel[/]")
 
-        new_cat_choice = _prompt_selection(
-            console, "New category #", len(available_categories)
-        )
+        new_cat_choice = _prompt_selection(console, "New category #", len(available_categories))
 
         if new_cat_choice is None:
             continue
@@ -313,9 +307,7 @@ def review_categories_interactive(
             overrides[track] = new_category
 
         if len(selected_tracks) == 1:
-            console.print(
-                f"Moved [bold]{selected_tracks[0]}[/] → [bold {color}]{new_category}[/]"
-            )
+            console.print(f"Moved [bold]{selected_tracks[0]}[/] → [bold {color}]{new_category}[/]")
         else:
             console.print(
                 f"Moved [bold]{len(selected_tracks)} tracks[/] → [bold {color}]{new_category}[/]"
@@ -347,7 +339,8 @@ def prompt_category_review(
 
     # Build list of categories that have tracks (sorted alphabetically)
     categories_with_tracks = sorted(
-        cat for cat in available_categories
+        cat
+        for cat in available_categories
         if any(current_categories.get(t) == cat for t in track_names)
     )
 

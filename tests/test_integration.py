@@ -195,9 +195,7 @@ class TestAnalyzeAlsV2:
         # CHORUS (32 beats) should produce 4 phrases
         lines = result.strip().split("\n")
         data_rows = [
-            row
-            for row in lines
-            if row.startswith("|") and "Time" not in row and "---" not in row
+            row for row in lines if row.startswith("|") and "Time" not in row and "---" not in row
         ]
         assert len(data_rows) == 10  # 2 + 4 + 4
 
@@ -445,9 +443,7 @@ class TestDistributeTimedLyrics:
         from alsmuse.models import Phrase
 
         phrases = [
-            Phrase(
-                start_beats=0, end_beats=8, section_name="V1", is_section_start=True
-            ),
+            Phrase(start_beats=0, end_beats=8, section_name="V1", is_section_start=True),
         ]
 
         result = distribute_timed_lyrics(phrases, [], bpm=120.0)
@@ -461,9 +457,7 @@ class TestDistributeTimedLyrics:
 
         # At 120 BPM, 8 beats = 4 seconds
         phrases = [
-            Phrase(
-                start_beats=0, end_beats=8, section_name="V1", is_section_start=True
-            ),
+            Phrase(start_beats=0, end_beats=8, section_name="V1", is_section_start=True),
         ]
 
         timed_lines = [
@@ -490,9 +484,7 @@ class TestDistributeTimedLyrics:
 
         # At 120 BPM, 8 beats = 4 seconds
         phrases = [
-            Phrase(
-                start_beats=0, end_beats=8, section_name="V1", is_section_start=True
-            ),
+            Phrase(start_beats=0, end_beats=8, section_name="V1", is_section_start=True),
         ]
 
         timed_lines = [
@@ -524,12 +516,8 @@ class TestDistributeTimedLyrics:
         # Phrase 1: 0-8 beats = 0-4 seconds
         # Phrase 2: 8-16 beats = 4-8 seconds
         phrases = [
-            Phrase(
-                start_beats=0, end_beats=8, section_name="V1", is_section_start=True
-            ),
-            Phrase(
-                start_beats=8, end_beats=16, section_name="...", is_section_start=False
-            ),
+            Phrase(start_beats=0, end_beats=8, section_name="V1", is_section_start=True),
+            Phrase(start_beats=8, end_beats=16, section_name="...", is_section_start=False),
         ]
 
         timed_lines = [
@@ -560,9 +548,7 @@ class TestDistributeTimedLyrics:
 
         # Phrase starts at 8 beats = 4 seconds at 120 BPM
         phrases = [
-            Phrase(
-                start_beats=8, end_beats=16, section_name="V1", is_section_start=True
-            ),
+            Phrase(start_beats=8, end_beats=16, section_name="V1", is_section_start=True),
         ]
 
         timed_lines = [
@@ -591,9 +577,7 @@ class TestDistributeTimedLyrics:
         from alsmuse.models import Phrase, TimedLine, TimedWord
 
         phrases = [
-            Phrase(
-                start_beats=0, end_beats=8, section_name="V1", is_section_start=True
-            ),
+            Phrase(start_beats=0, end_beats=8, section_name="V1", is_section_start=True),
         ]
 
         timed_lines = [
@@ -616,9 +600,7 @@ class TestDistributeTimedLyrics:
         from alsmuse.lyrics import distribute_timed_lyrics
         from alsmuse.models import Phrase, TrackEvent
 
-        event = TrackEvent(
-            beat=0, track_name="Bass", event_type="enter", category="bass"
-        )
+        event = TrackEvent(beat=0, track_name="Bass", event_type="enter", category="bass")
         phrases = [
             Phrase(
                 start_beats=10,
@@ -821,9 +803,7 @@ class TestCLIOptions:
         output_file = tmp_path / "av_table.md"
 
         # Run with --output option
-        result = runner.invoke(
-            main, ["analyze", str(als_file), "--output", str(output_file)]
-        )
+        result = runner.invoke(main, ["analyze", str(als_file), "--output", str(output_file)])
 
         assert result.exit_code == 0
         assert output_file.exists()
@@ -863,9 +843,7 @@ class TestTimestampedLyricsBypassAlignment:
 
         # Create LRC lyrics file with timestamps
         lyrics_file = tmp_path / "lyrics.lrc"
-        lyrics_file.write_text(
-            "[00:08.00]First verse line\n[00:12.00]Second verse line\n"
-        )
+        lyrics_file.write_text("[00:08.00]First verse line\n[00:12.00]Second verse line\n")
 
         # With align_vocals=True but timestamped lyrics, alignment is bypassed
         # This would fail if alignment were attempted (no audio tracks)
@@ -936,9 +914,7 @@ class TestTimestampedLyricsBypassAlignment:
         assert "First verse line" in result
         assert "Second verse line" in result
 
-    def test_plain_text_lyrics_with_align_triggers_alignment(
-        self, tmp_path: Path
-    ) -> None:
+    def test_plain_text_lyrics_with_align_triggers_alignment(self, tmp_path: Path) -> None:
         """Plain text lyrics with align_vocals=True attempts alignment.
 
         Since MINIMAL_ALS_XML has no audio tracks, alignment fails and

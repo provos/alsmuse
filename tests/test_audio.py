@@ -240,9 +240,9 @@ class TestBeatsToFileSeconds:
         # Non-linear warping: different stretch rates in different regions
         markers = [
             (0.0, 0.0),
-            (2.0, 1.0),   # First 2 beats = 1 second
-            (4.0, 1.5),   # Next 2 beats = 0.5 seconds (faster)
-            (6.0, 3.0),   # Next 2 beats = 1.5 seconds (slower)
+            (2.0, 1.0),  # First 2 beats = 1 second
+            (4.0, 1.5),  # Next 2 beats = 0.5 seconds (faster)
+            (6.0, 3.0),  # Next 2 beats = 1.5 seconds (slower)
         ]
 
         # Beat 1 is between markers 0 and 1
@@ -1358,9 +1358,7 @@ class TestSelectVocalTracks:
 
         assert len(result) == 1
         assert result[0].track_name == "Lead Vocal"
-        mock_prompt.assert_called_once_with(
-            ["Lead Vocal", "Backing Vox"], default_tracks=None
-        )
+        mock_prompt.assert_called_once_with(["Lead Vocal", "Backing Vox"], default_tracks=None)
 
     def test_tty_with_config_tracks_uses_as_defaults(self) -> None:
         """TTY with config_tracks passes them as defaults to prompt."""

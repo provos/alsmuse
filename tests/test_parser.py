@@ -83,9 +83,7 @@ GROUP_TRACK_TEMPLATE = """\
       </GroupTrack>"""
 
 
-def make_midi_track(
-    track_id: int, name: str, enabled: bool = True, group_id: int = -1
-) -> str:
+def make_midi_track(track_id: int, name: str, enabled: bool = True, group_id: int = -1) -> str:
     """Create a MIDI track XML string."""
     return MIDI_TRACK_TEMPLATE.format(
         id=track_id,

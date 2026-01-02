@@ -1019,8 +1019,7 @@ def prompt_track_selection(
     if default_tracks is not None:
         default_set = {t.lower() for t in default_tracks}
         choices = [
-            questionary.Choice(name, checked=name.lower() in default_set)
-            for name in track_names
+            questionary.Choice(name, checked=name.lower() in default_set) for name in track_names
         ]
     else:
         # No defaults specified: pre-select all
@@ -1081,9 +1080,7 @@ def select_vocal_tracks(
     def is_vocal(clip: AudioClipRef) -> bool:
         if is_vocal_track(clip.track_name):
             return True
-        return bool(
-            category_overrides and category_overrides.get(clip.track_name) == "vocals"
-        )
+        return bool(category_overrides and category_overrides.get(clip.track_name) == "vocals")
 
     vocal_clips = [c for c in all_clips if is_vocal(c)]
     track_names = get_unique_vocal_track_names(vocal_clips)
