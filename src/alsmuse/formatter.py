@@ -8,29 +8,28 @@ from .models import Phrase, Section, TrackEvent
 
 
 def format_time(seconds: float) -> str:
-    """Format seconds as M:SS or MM:SS.
+    """Format seconds as M:SS.s or MM:SS.s.
 
     Converts a time in seconds to a human-readable format with
-    minutes and seconds, rounded to the nearest second.
+    minutes and seconds, showing one decimal place.
 
     Args:
         seconds: Time in seconds to format.
 
     Returns:
-        Formatted time string in M:SS or MM:SS format.
+        Formatted time string in M:SS.s or MM:SS.s format.
 
     Examples:
         >>> format_time(11.67)
-        '0:11'
+        '0:11.7'
         >>> format_time(65.5)
-        '1:05'
+        '1:05.5'
         >>> format_time(125.3)
-        '2:05'
+        '2:05.3'
     """
-    total_seconds = round(seconds)
-    minutes = total_seconds // 60
-    remaining_seconds = total_seconds % 60
-    return f"{minutes}:{remaining_seconds:02d}"
+    minutes = int(seconds // 60)
+    remaining_seconds = seconds - (minutes * 60)
+    return f"{minutes}:{remaining_seconds:04.1f}"
 
 
 def format_av_table(sections: list[Section], bpm: float) -> str:

@@ -525,19 +525,15 @@ def refine_alignment_with_bournemouth(
             refined_lines.append(line)
             continue
 
-        audio_segment = _extract_audio_segment(
-            audio_wav, sample_rate, seg_start, seg_end
-        )
+        audio_segment = _extract_audio_segment(audio_wav, sample_rate, seg_start, seg_end)
 
         try:
             # Align this line's text within the search window
-            refined_words, avg_confidence, low_conf_words = (
-                _align_segment_with_bournemouth(
-                    aligner,
-                    audio_segment,
-                    line.text,
-                    seg_start,
-                )
+            refined_words, avg_confidence, low_conf_words = _align_segment_with_bournemouth(
+                aligner,
+                audio_segment,
+                line.text,
+                seg_start,
             )
 
             if refined_words:
@@ -658,7 +654,5 @@ def align_repeated_section(
     )
 
     # Align and return just the words (ignore confidence info for this API)
-    words, _, _ = _align_segment_with_bournemouth(
-        aligner, audio_segment, text, start_sec
-    )
+    words, _, _ = _align_segment_with_bournemouth(aligner, audio_segment, text, start_sec)
     return words

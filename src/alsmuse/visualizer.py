@@ -538,14 +538,16 @@ def encode_video_with_ffmpeg(
         cmd.extend(["-i", str(audio_path)])
 
     # Output options (after all inputs)
-    cmd.extend([
-        "-c:v",
-        "libx264",
-        "-crf",
-        str(VIDEO_CRF),
-        "-pix_fmt",
-        "yuv420p",  # Compatibility
-    ])
+    cmd.extend(
+        [
+            "-c:v",
+            "libx264",
+            "-crf",
+            str(VIDEO_CRF),
+            "-pix_fmt",
+            "yuv420p",  # Compatibility
+        ]
+    )
 
     # Add audio output options if audio was provided
     if audio_path is not None:

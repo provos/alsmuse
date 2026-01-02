@@ -19,9 +19,9 @@ class TestReviewCategoriesInteractive:
         current_categories = {"Drums": "drums", "Bass": "bass", "Lead": "lead"}
         available_categories = ["drums", "bass", "vocals", "lead", "other"]
 
-        with patch("alsmuse.category_review.questionary") as mock_questionary:
-            # User selects "Done" immediately
-            mock_questionary.select.return_value.ask.return_value = None
+        with patch("alsmuse.category_review.Prompt.ask") as mock_ask:
+            # User presses Enter immediately (empty string = done)
+            mock_ask.return_value = ""
 
             result = review_categories_interactive(
                 track_names, current_categories, available_categories
@@ -35,23 +35,24 @@ class TestReviewCategoriesInteractive:
         current_categories = {"Drums": "other", "Bass": "bass"}
         available_categories = ["drums", "bass", "other"]
 
-        with patch("alsmuse.category_review.questionary") as mock_questionary:
+        with patch("alsmuse.category_review.Prompt.ask") as mock_ask:
             # Mock the sequence of user interactions:
-            # 1. Select "other" category to review
-            # 2. Select "Drums" track
-            # 3. Select "drums" as new category
-            # 4. Select "Done"
-            mock_questionary.select.return_value.ask.side_effect = [
-                "other",  # Select category
-                "Drums",  # Select track
-                "drums",  # New category
-                None,  # Done
+            # 1. Select category #2 (other) to review
+            # 2. Select track #1 (Drums)
+            # 3. Select category #1 (drums) as new category
+            # 4. Press Enter to go back to categories
+            # 5. Press Enter to finish (done)
+            mock_ask.side_effect = [
+                "2",  # Select "other" category (index 2 in [bass, other])
+                "1",  # Select "Drums" track
+                "1",  # Select "drums" as new category
+                "",  # Back to tracks
+                "",  # Done with categories
             ]
 
-            with patch("alsmuse.category_review.click.echo"):
-                result = review_categories_interactive(
-                    track_names, current_categories, available_categories
-                )
+            result = review_categories_interactive(
+                track_names, current_categories, available_categories
+            )
 
         assert result == {"Drums": "drums"}
 
@@ -61,12 +62,12 @@ class TestReviewCategoriesInteractive:
         current_categories = {"Drums": "drums"}
         available_categories = ["drums", "other"]
 
-        with patch("alsmuse.category_review.questionary") as mock_questionary:
+        with patch("alsmuse.category_review.Prompt.ask") as mock_ask:
             # User selects category, then goes back, then done
-            mock_questionary.select.return_value.ask.side_effect = [
-                "drums",  # Select category
-                None,  # Back to categories
-                None,  # Done
+            mock_ask.side_effect = [
+                "1",  # Select "drums" category
+                "",  # Back to categories (no track selected)
+                "",  # Done
             ]
 
             result = review_categories_interactive(
@@ -121,14 +122,17 @@ class TestPromptCategoryReview:
             mock_stdin.isatty.return_value = True
 
             with patch("alsmuse.category_review.questionary") as mock_questionary:
-                # User accepts review, then immediately chooses Done
+                # User accepts review
                 mock_questionary.confirm.return_value.ask.return_value = True
-                mock_questionary.select.return_value.ask.return_value = None
 
-                with patch("builtins.print"):
-                    result = prompt_category_review(
-                        track_names, current_categories, available_categories
-                    )
+                with patch("alsmuse.category_review.Prompt.ask") as mock_ask:
+                    # User immediately presses Enter to finish
+                    mock_ask.return_value = ""
+
+                    with patch("builtins.print"):
+                        result = prompt_category_review(
+                            track_names, current_categories, available_categories
+                        )
 
         # Should return empty dict (no overrides made)
         assert result == {}
