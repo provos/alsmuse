@@ -1,8 +1,12 @@
 # ALSmuse
 
+[![CI](https://github.com/provos/alsmuse/actions/workflows/ci.yml/badge.svg)](https://github.com/provos/alsmuse/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 Generate A/V scripts and visualizations from Ableton Live Sets for music video planning.
 
-ALSmuse analyzes Ableton Live Set (.als) files to extract musical structure, track events, and lyrics timing. It produces either markdown tables for A/V (audio/visual) scripts or video visualizations showing song structure with animated lyrics—helping directors and editors sync video scenes with music.
+ALSmuse analyzes Ableton Live Set (.als) files to extract musical structure, track events, and lyrics timing. It produces either markdown tables for A/V (audio/visual) scripts or video visualizations showing song structure with animated lyrics — helping directors and editors sync video scenes with music.
 
 ## Example Output
 
