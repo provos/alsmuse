@@ -61,7 +61,7 @@ EVENT_BADGE_FONT_SIZE = 18
 SECTION_Y = 60
 TIMECODE_Y = 60
 LYRIC_CENTER_Y = 360
-LYRIC_LINE_SPACING = 60
+LYRIC_GAP = 40  # Gap between prev/current/next lyric blocks
 EVENT_ROW_Y = 580
 PROGRESS_BAR_X = 40
 PROGRESS_BAR_Y = 680
@@ -70,6 +70,30 @@ PROGRESS_BAR_HEIGHT = 8
 
 # Animation timing
 EVENT_FADE_SECONDS = 4.0
+
+
+def _load_font_at_size(
+    font_path: Path | None,
+    size: int,
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Load a font at the specified size.
+
+    Args:
+        font_path: Path to a TTF font file, or None for PIL default.
+        size: Font size in points.
+
+    Returns:
+        Loaded font at the specified size.
+    """
+    if font_path is not None:
+        return ImageFont.truetype(str(font_path), size)
+    # Fall back to PIL default - this returns a basic font
+    # Use load_default with explicit size if available (Pillow 10+)
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        # Older Pillow without size parameter
+        return ImageFont.load_default()
 
 
 @dataclass
@@ -82,6 +106,27 @@ class FontSet:
     current: ImageFont.FreeTypeFont | ImageFont.ImageFont
     current_bold: ImageFont.FreeTypeFont | ImageFont.ImageFont
     event: ImageFont.FreeTypeFont | ImageFont.ImageFont
+    font_path: Path | None = None
+    _size_cache: dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] | None = None
+
+    def get_font_at_size(self, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+        """Get a font at the specified size, using cache.
+
+        Args:
+            size: Font size in points.
+
+        Returns:
+            Font loaded at the specified size.
+        """
+        if self._size_cache is None:
+            object.__setattr__(self, "_size_cache", {})
+
+        cache = self._size_cache
+        assert cache is not None  # For type checker
+
+        if size not in cache:
+            cache[size] = _load_font_at_size(self.font_path, size)
+        return cache[size]
 
     @classmethod
     def load(cls, font_path: Path | None = None) -> FontSet:
@@ -126,26 +171,15 @@ class FontSet:
         if loaded_font is None:
             logger.warning("No suitable font found, using PIL default")
 
-        def load_font_at_size(
-            size: int,
-        ) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-            if loaded_font is not None:
-                return ImageFont.truetype(str(loaded_font), size)
-            # Fall back to PIL default - this returns a basic font
-            # Use load_default with explicit size if available (Pillow 10+)
-            try:
-                return ImageFont.load_default(size=size)
-            except TypeError:
-                # Older Pillow without size parameter
-                return ImageFont.load_default()
-
         return cls(
-            section=load_font_at_size(SECTION_FONT_SIZE),
-            timecode=load_font_at_size(TIMECODE_FONT_SIZE),
-            prev_next=load_font_at_size(PREV_NEXT_LYRIC_FONT_SIZE),
-            current=load_font_at_size(CURRENT_LYRIC_FONT_SIZE),
-            current_bold=load_font_at_size(CURRENT_LYRIC_FONT_SIZE),
-            event=load_font_at_size(EVENT_BADGE_FONT_SIZE),
+            section=_load_font_at_size(loaded_font, SECTION_FONT_SIZE),
+            timecode=_load_font_at_size(loaded_font, TIMECODE_FONT_SIZE),
+            prev_next=_load_font_at_size(loaded_font, PREV_NEXT_LYRIC_FONT_SIZE),
+            current=_load_font_at_size(loaded_font, CURRENT_LYRIC_FONT_SIZE),
+            current_bold=_load_font_at_size(loaded_font, CURRENT_LYRIC_FONT_SIZE),
+            event=_load_font_at_size(loaded_font, EVENT_BADGE_FONT_SIZE),
+            font_path=loaded_font,
+            _size_cache={},
         )
 
 
@@ -204,6 +238,39 @@ def format_event_badge(event: TrackEvent) -> str:
     prefix = "+" if event.event_type == "enter" else "-"
     # Use category as the display name for consistency
     return f"{prefix}{event.category.upper()}"
+
+
+def _transform_lyrics(text: str) -> str:
+    """Transform lyric text for display.
+
+    Splits lyrics at " / " markers into separate lines for better
+    screen fit while preserving readability.
+
+    Args:
+        text: Raw lyric text.
+
+    Returns:
+        Transformed text with line breaks.
+    """
+    return text.replace(" / ", "\n")
+
+
+def _calculate_text_block_height(
+    text: str,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+) -> int:
+    """Calculate the total height of a multi-line text block.
+
+    Args:
+        text: Text that may contain newlines.
+        font: Font to use for measurement.
+
+    Returns:
+        Total height in pixels.
+    """
+    lines = text.split("\n")
+    line_height: int = int(font.size) + 5 if hasattr(font, "size") else 40
+    return len(lines) * line_height
 
 
 def compute_phrase_times(
@@ -342,33 +409,47 @@ def render_frame(state: FrameState, fonts: FontSet) -> Image.Image:
         fill=TIMECODE_COLOR,
     )
 
-    # Draw lyrics (centered vertically)
+    # Draw lyrics (centered vertically with dynamic spacing)
+    # Transform lyrics to handle " / " separators
+    current_text = _transform_lyrics(state.current_lyric.upper()) if state.current_lyric else ""
+    prev_text = _transform_lyrics(state.prev_lyric) if state.prev_lyric else ""
+    next_text = _transform_lyrics(state.next_lyric) if state.next_lyric else ""
+
+    # Calculate current lyric block height for dynamic positioning
+    current_height = _calculate_text_block_height(current_text, fonts.current_bold) if current_text else 0
+
     # Previous lyric (dim, above current)
-    if state.prev_lyric:
+    if prev_text:
+        prev_height = _calculate_text_block_height(prev_text, fonts.prev_next)
+        # Position so bottom of prev block is LYRIC_GAP above top of current block
+        prev_y = LYRIC_CENTER_Y - current_height // 2 - LYRIC_GAP - prev_height // 2
         _draw_centered_text(
             draw,
-            state.prev_lyric,
-            LYRIC_CENTER_Y - LYRIC_LINE_SPACING,
+            prev_text,
+            prev_y,
             fonts.prev_next,
             PREV_NEXT_LYRIC_COLOR,
         )
 
     # Current lyric (bright, center)
-    if state.current_lyric:
+    if current_text:
         _draw_centered_text(
             draw,
-            state.current_lyric.upper(),
+            current_text,
             LYRIC_CENTER_Y,
             fonts.current_bold,
             CURRENT_LYRIC_COLOR,
         )
 
     # Next lyric (dim, below current)
-    if state.next_lyric:
+    if next_text:
+        next_height = _calculate_text_block_height(next_text, fonts.prev_next)
+        # Position so top of next block is LYRIC_GAP below bottom of current block
+        next_y = LYRIC_CENTER_Y + current_height // 2 + LYRIC_GAP + next_height // 2
         _draw_centered_text(
             draw,
-            state.next_lyric,
-            LYRIC_CENTER_Y + LYRIC_LINE_SPACING,
+            next_text,
+            next_y,
             fonts.prev_next,
             PREV_NEXT_LYRIC_COLOR,
         )
