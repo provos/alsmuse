@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from alsmuse.models import Phrase, TrackEvent
+from alsmuse.models import Phrase, TimeContext, TrackEvent
 from alsmuse.visualizer import (
     BACKGROUND_COLOR,
     CATEGORY_COLORS,
@@ -110,7 +110,8 @@ class TestComputePhraseTimes:
 
     def test_empty_phrases_returns_empty_list(self) -> None:
         """Empty phrase list returns empty list."""
-        assert compute_phrase_times([], 120.0) == []
+        time_ctx = TimeContext(bpm=120.0)
+        assert compute_phrase_times([], time_ctx) == []
 
     def test_single_phrase_computes_times(self) -> None:
         """Single phrase computes correct start and end times."""
@@ -123,7 +124,8 @@ class TestComputePhraseTimes:
             )
         ]
         # At 120 BPM: 1 beat = 0.5 seconds, so 8 beats = 4 seconds
-        times = compute_phrase_times(phrases, 120.0)
+        time_ctx = TimeContext(bpm=120.0)
+        times = compute_phrase_times(phrases, time_ctx)
 
         assert len(times) == 1
         assert times[0][0] == pytest.approx(0.0)
@@ -151,7 +153,8 @@ class TestComputePhraseTimes:
                 is_section_start=True,
             ),
         ]
-        times = compute_phrase_times(phrases, 120.0)
+        time_ctx = TimeContext(bpm=120.0)
+        times = compute_phrase_times(phrases, time_ctx)
 
         assert len(times) == 3
         assert times[0] == pytest.approx((0.0, 4.0))
@@ -211,7 +214,8 @@ class TestBuildFrameStates:
 
     def test_empty_phrases_yields_nothing(self) -> None:
         """Empty phrase list yields no frames."""
-        states = list(build_frame_states([], 120.0, 0.0))
+        time_ctx = TimeContext(bpm=120.0)
+        states = list(build_frame_states([], time_ctx, 0.0))
         assert states == []
 
     def test_generates_correct_number_of_frames(self) -> None:
@@ -228,7 +232,8 @@ class TestBuildFrameStates:
         # 8 beats at 120 BPM = 4 seconds
         # 4 seconds * 24 fps = 96 frames
         total_beats = 8.0
-        states = list(build_frame_states(phrases, 120.0, total_beats))
+        time_ctx = TimeContext(bpm=120.0)
+        states = list(build_frame_states(phrases, time_ctx, total_beats))
 
         assert len(states) == 96
 
@@ -242,7 +247,8 @@ class TestBuildFrameStates:
                 is_section_start=True,
             )
         ]
-        states = list(build_frame_states(phrases, 120.0, 8.0))
+        time_ctx = TimeContext(bpm=120.0)
+        states = list(build_frame_states(phrases, time_ctx, 8.0))
 
         # Check first few frames
         assert states[0].current_time == pytest.approx(0.0)
@@ -265,7 +271,8 @@ class TestBuildFrameStates:
                 is_section_start=True,
             ),
         ]
-        states = list(build_frame_states(phrases, 120.0, 16.0))
+        time_ctx = TimeContext(bpm=120.0)
+        states = list(build_frame_states(phrases, time_ctx, 16.0))
 
         # First phrase (0-4 seconds = frames 0-95)
         assert states[0].section_name == "INTRO"
@@ -299,7 +306,8 @@ class TestBuildFrameStates:
                 lyric="Third line",
             ),
         ]
-        states = list(build_frame_states(phrases, 120.0, 24.0))
+        time_ctx = TimeContext(bpm=120.0)
+        states = list(build_frame_states(phrases, time_ctx, 24.0))
 
         # During first phrase: no prev, current is first, next is second
         assert states[0].prev_lyric == ""
@@ -327,7 +335,8 @@ class TestBuildFrameStates:
             )
         ]
         # 8 beats at 120 BPM = 4 seconds
-        states = list(build_frame_states(phrases, 120.0, 8.0))
+        time_ctx = TimeContext(bpm=120.0)
+        states = list(build_frame_states(phrases, time_ctx, 8.0))
 
         assert all(s.total_time == pytest.approx(4.0) for s in states)
 
@@ -469,10 +478,11 @@ class TestGenerateVisualizer:
             output_path = Path(f.name)
 
         try:
+            time_ctx = TimeContext(bpm=120.0)
             with pytest.raises(ValueError, match="No phrases"):
                 generate_visualizer(
                     phrases=[],
-                    bpm=120.0,
+                    time_ctx=time_ctx,
                     total_beats=0.0,
                     output_path=output_path,
                 )
@@ -495,10 +505,11 @@ class TestGenerateVisualizer:
             output_path = Path(f.name)
 
         try:
+            time_ctx = TimeContext(bpm=120.0)
             with pytest.raises(ValueError, match="zero frames"):
                 generate_visualizer(
                     phrases=phrases,
-                    bpm=120.0,
+                    time_ctx=time_ctx,
                     total_beats=0.0,
                     output_path=output_path,
                 )
@@ -530,9 +541,10 @@ class TestGenerateVisualizer:
             if shutil.which("ffmpeg") is None:
                 pytest.skip("ffmpeg not available")
 
+            time_ctx = TimeContext(bpm=120.0)
             generate_visualizer(
                 phrases=phrases,
-                bpm=120.0,
+                time_ctx=time_ctx,
                 total_beats=2.0,  # 1 second at 120 BPM
                 output_path=output_path,
                 progress_callback=progress_callback,
@@ -569,9 +581,10 @@ class TestGenerateVisualizer:
             output_path = Path(f.name)
 
         try:
+            time_ctx = TimeContext(bpm=120.0)
             result = generate_visualizer(
                 phrases=phrases,
-                bpm=120.0,
+                time_ctx=time_ctx,
                 total_beats=2.0,
                 output_path=output_path,
             )
@@ -601,7 +614,8 @@ class TestEventFading:
             )
         ]
 
-        states = list(build_frame_states(phrases, 120.0, 8.0))
+        time_ctx = TimeContext(bpm=120.0)
+        states = list(build_frame_states(phrases, time_ctx, 8.0))
 
         # Events may not be immediately active in first frame due to timing
         # Check early frames for event presence

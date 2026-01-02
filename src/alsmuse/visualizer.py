@@ -17,7 +17,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .models import Phrase, TrackEvent
+from .models import Phrase, TimeContext, TrackEvent
 
 logger = logging.getLogger(__name__)
 
@@ -206,22 +206,33 @@ def format_event_badge(event: TrackEvent) -> str:
     return f"{prefix}{event.category.upper()}"
 
 
-def compute_phrase_times(phrases: list[Phrase], bpm: float) -> list[tuple[float, float]]:
-    """Compute start and end times for each phrase.
+def compute_phrase_times(
+    phrases: list[Phrase], time_ctx: TimeContext
+) -> list[tuple[float, float]]:
+    """Compute start and end display times for each phrase.
+
+    Times are adjusted using the TimeContext offset, so they start from 0
+    when a start_bar is specified.
 
     Args:
         phrases: List of phrases.
-        bpm: Tempo in beats per minute.
+        time_ctx: TimeContext for time conversion (includes BPM and offset).
 
     Returns:
-        List of (start_seconds, end_seconds) tuples for each phrase.
+        List of (start_seconds, end_seconds) tuples for each phrase,
+        relative to the start offset.
     """
-    return [(p.start_time(bpm), p.start_time(bpm) + p.duration_seconds(bpm)) for p in phrases]
+    result = []
+    for p in phrases:
+        start = time_ctx.beats_to_display_seconds(p.start_beats)
+        end = time_ctx.beats_to_display_seconds(p.end_beats)
+        result.append((start, end))
+    return result
 
 
 def build_frame_states(
     phrases: list[Phrase],
-    bpm: float,
+    time_ctx: TimeContext,
     total_beats: float,
 ) -> Generator[FrameState, None, None]:
     """Generate frame states for each frame of the video.
@@ -229,16 +240,19 @@ def build_frame_states(
     Creates a FrameState for each frame based on the current time,
     determining which phrase is active, which events are visible, etc.
 
+    Times displayed are adjusted using the TimeContext offset, so when
+    a start_bar is specified, the video shows time starting from 0:00.
+
     Args:
         phrases: List of phrases with lyrics and events.
-        bpm: Tempo in beats per minute.
-        total_beats: Total song duration in beats.
+        time_ctx: TimeContext for time conversion (includes BPM and offset).
+        total_beats: Adjusted total duration in beats (after offset applied).
 
     Yields:
         FrameState for each frame.
     """
-    total_time = total_beats * 60 / bpm
-    phrase_times = compute_phrase_times(phrases, bpm)
+    total_time = total_beats * 60 / time_ctx.bpm
+    phrase_times = compute_phrase_times(phrases, time_ctx)
     total_frames = int(total_time * FRAME_RATE)
 
     # Track active events with their start times
@@ -565,7 +579,7 @@ def encode_video_with_ffmpeg(
 
 def generate_visualizer(
     phrases: list[Phrase],
-    bpm: float,
+    time_ctx: TimeContext,
     total_beats: float,
     output_path: Path,
     audio_path: Path | None = None,
@@ -576,10 +590,15 @@ def generate_visualizer(
     Renders frames showing lyrics, section markers, track events, and a
     progress bar, then encodes them to an MP4 video.
 
+    When time_ctx has a start offset, the video will:
+    - Skip phrases that occur before the start offset
+    - Be shorter (only covering content from start_bar onward)
+    - Show timecode starting from 0:00 at the start offset
+
     Args:
         phrases: List of phrases with lyrics, events, and section info.
-        bpm: Tempo in beats per minute.
-        total_beats: Total song duration in beats.
+        time_ctx: TimeContext for time conversion (includes BPM and offset).
+        total_beats: Total song duration in beats (from original timeline).
         output_path: Path to write the output MP4 file.
         audio_path: Optional audio file to mux into the video.
         progress_callback: Optional callback called with (frame_num, total_frames)
@@ -591,11 +610,19 @@ def generate_visualizer(
     Raises:
         RuntimeError: If video generation fails.
     """
-    if not phrases:
-        raise ValueError("No phrases provided for visualization")
+    # Filter phrases to only include those at or after start offset
+    filtered_phrases = [
+        p for p in phrases if p.start_beats >= time_ctx.start_offset_beats
+    ]
+
+    if not filtered_phrases:
+        raise ValueError("No phrases provided for visualization after start_bar filter")
+
+    # Calculate adjusted total beats (video duration is shorter when offset is applied)
+    adjusted_total_beats = total_beats - time_ctx.start_offset_beats
 
     # Calculate total duration and frames
-    total_time = total_beats * 60 / bpm
+    total_time = adjusted_total_beats * 60 / time_ctx.bpm
     total_frames = int(total_time * FRAME_RATE)
 
     if total_frames == 0:
@@ -616,7 +643,7 @@ def generate_visualizer(
         frames_path = Path(temp_dir)
 
         # Generate frames
-        frame_generator = build_frame_states(phrases, bpm, total_beats)
+        frame_generator = build_frame_states(filtered_phrases, time_ctx, adjusted_total_beats)
 
         for frame_num, state in enumerate(frame_generator):
             img = render_frame(state, fonts)

@@ -7,7 +7,7 @@ import pytest
 from alsmuse.analyze import detect_suggested_start_bar
 from alsmuse.config import MuseConfig
 from alsmuse.formatter import format_av_table, format_phrase_table
-from alsmuse.models import Clip, LiveSet, Phrase, Section, Tempo, Track
+from alsmuse.models import Clip, LiveSet, Phrase, Section, Tempo, TimeContext, Track
 from alsmuse.parser import parse_als_file
 
 
@@ -119,7 +119,7 @@ class TestDetectSuggestedStartBar:
 
 
 class TestFormatPhraseTableWithOffset:
-    """Tests for format_phrase_table with start_offset_beats."""
+    """Tests for format_phrase_table with TimeContext offset."""
 
     def test_no_offset_shows_absolute_time(self):
         """Without offset, times start at 0:00."""
@@ -137,7 +137,8 @@ class TestFormatPhraseTableWithOffset:
                 is_section_start=False,
             ),
         ]
-        result = format_phrase_table(phrases, bpm=120.0, show_events=False)
+        time_ctx = TimeContext(bpm=120.0)
+        result = format_phrase_table(phrases, time_ctx, show_events=False)
         assert "| 0:00.0 |" in result
         assert "| 0:04.0 |" in result
 
@@ -158,7 +159,8 @@ class TestFormatPhraseTableWithOffset:
             ),
         ]
         # Offset of 32 beats (bar 8) should make first phrase start at 0:00
-        result = format_phrase_table(phrases, bpm=120.0, show_events=False, start_offset_beats=32.0)
+        time_ctx = TimeContext(bpm=120.0, start_offset_beats=32.0)
+        result = format_phrase_table(phrases, time_ctx, show_events=False)
         assert "| 0:00.0 |" in result
         assert "| 0:04.0 |" in result
 
@@ -173,13 +175,14 @@ class TestFormatPhraseTableWithOffset:
             ),
         ]
         # Offset of 32 beats when phrase starts at 0 should show -16 seconds
-        result = format_phrase_table(phrases, bpm=120.0, show_events=False, start_offset_beats=32.0)
+        time_ctx = TimeContext(bpm=120.0, start_offset_beats=32.0)
+        result = format_phrase_table(phrases, time_ctx, show_events=False)
         # Should contain negative time
         assert "-" in result.split("\n")[2]  # First data row
 
 
 class TestFormatAvTableWithOffset:
-    """Tests for format_av_table with start_offset_beats."""
+    """Tests for format_av_table with TimeContext offset."""
 
     def test_no_offset_shows_absolute_time(self):
         """Without offset, times start at 0:00."""
@@ -187,7 +190,8 @@ class TestFormatAvTableWithOffset:
             Section(name="INTRO", start_beats=0.0, end_beats=16.0),
             Section(name="VERSE", start_beats=16.0, end_beats=32.0),
         ]
-        result = format_av_table(sections, bpm=120.0)
+        time_ctx = TimeContext(bpm=120.0)
+        result = format_av_table(sections, time_ctx)
         assert "| 0:00.0 | INTRO |" in result
         assert "| 0:08.0 | VERSE |" in result
 
@@ -197,7 +201,8 @@ class TestFormatAvTableWithOffset:
             Section(name="INTRO", start_beats=32.0, end_beats=48.0),
             Section(name="VERSE", start_beats=48.0, end_beats=64.0),
         ]
-        result = format_av_table(sections, bpm=120.0, start_offset_beats=32.0)
+        time_ctx = TimeContext(bpm=120.0, start_offset_beats=32.0)
+        result = format_av_table(sections, time_ctx)
         assert "| 0:00.0 | INTRO |" in result
         assert "| 0:08.0 | VERSE |" in result
 

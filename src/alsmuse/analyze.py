@@ -50,7 +50,7 @@ from .lyrics_align import (
     words_to_lines,
 )
 from .midi import extract_midi_clip_contents
-from .models import LiveSet, MidiClipContent, Phrase, Section, TrackEvent
+from .models import LiveSet, MidiClipContent, Phrase, Section, TimeContext, TrackEvent
 from .parser import (
     extract_track_clips,
     extract_track_name,
@@ -559,7 +559,7 @@ def _prepare_phrases(
     model_size: str,
     interactive: bool,
     start_bar: int | None,
-) -> tuple[list[Phrase], float, float, bool]:
+) -> tuple[list[Phrase], TimeContext, float, bool]:
     """Prepare phrases by parsing ALS, extracting sections, and processing lyrics.
 
     This internal function contains the common pipeline used by both markdown
@@ -591,14 +591,15 @@ def _prepare_phrases(
         start_bar: Optional bar number where the song starts (for time offset)
 
     Returns:
-        Tuple of (phrases, bpm, total_beats, show_lyrics):
+        Tuple of (phrases, time_ctx, total_beats, show_lyrics):
         - phrases: List of Phrase objects with events and lyrics
-        - bpm: Tempo in beats per minute
+        - time_ctx: TimeContext for time conversion (includes BPM and offset)
         - total_beats: Total beats from the last phrase
         - show_lyrics: Whether lyrics were successfully processed
     """
     live_set = parse_als_file(als_path)
     bpm = live_set.tempo.bpm
+    time_signature = live_set.tempo.time_signature
 
     # Load existing config
     config = load_config(als_path)
@@ -702,7 +703,10 @@ def _prepare_phrases(
             phrases = distribute_lyrics(phrases, section_lyrics)
             show_lyrics = True
 
-    return phrases, bpm, total_beats, show_lyrics
+    # Create TimeContext for output formatting
+    time_ctx = TimeContext.from_start_bar(bpm, start_bar, time_signature)
+
+    return phrases, time_ctx, total_beats, show_lyrics
 
 
 def analyze_als(
@@ -777,7 +781,7 @@ def analyze_als(
         RuntimeError: If video generation fails (for .mp4 output)
     """
     # Prepare phrases using the common pipeline
-    phrases, bpm, total_beats, show_lyrics = _prepare_phrases(
+    phrases, time_ctx, total_beats, show_lyrics = _prepare_phrases(
         als_path=als_path,
         structure_track=structure_track,
         beats_per_phrase=beats_per_phrase,
@@ -800,7 +804,7 @@ def analyze_als(
         # Video output
         return generate_visualizer(
             phrases=phrases,
-            bpm=bpm,
+            time_ctx=time_ctx,
             total_beats=total_beats,
             output_path=output_path,
             audio_path=audio_path,
@@ -808,4 +812,6 @@ def analyze_als(
         )
     else:
         # Markdown output (default)
-        return format_phrase_table(phrases, bpm, show_events=show_events, show_lyrics=show_lyrics)
+        return format_phrase_table(
+            phrases, time_ctx, show_events=show_events, show_lyrics=show_lyrics
+        )

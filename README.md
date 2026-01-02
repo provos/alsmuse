@@ -1,8 +1,8 @@
 # ALSmuse
 
-Generate A/V script tables from Ableton Live Sets for music video planning.
+Generate A/V scripts and visualizations from Ableton Live Sets for music video planning.
 
-ALSmuse analyzes Ableton Live Set (.als) files to extract musical structure, track events, and lyrics timing. It produces markdown tables that serve as the "Audio" column of an A/V (audio/visual) script, helping directors and editors sync video scenes with music.
+ALSmuse analyzes Ableton Live Set (.als) files to extract musical structure, track events, and lyrics timing. It produces either markdown tables for A/V (audio/visual) scripts or video visualizations showing song structure with animated lyrics—helping directors and editors sync video scenes with music.
 
 ## Example Output
 
@@ -27,6 +27,7 @@ ALSmuse analyzes Ableton Live Set (.als) files to extract musical structure, tra
   - ASR transcription from vocal audio
 - **Forced Alignment**: Aligns plain text lyrics to audio using Whisper for precise timing
 - **LRC Export**: Save aligned or transcribed lyrics in LRC format for reuse
+- **Video Visualization**: Generate MP4 videos showing song structure with animated lyrics, optionally muxed with audio
 
 ## Installation
 
@@ -55,18 +56,40 @@ uv sync --extra align-mlx
 ### Basic Analysis
 
 ```bash
-# Analyze an Ableton Live Set
+# Analyze an Ableton Live Set (prints A/V table to stdout)
 alsmuse analyze song.als
 
 # Customize phrase length (default: 2 bars)
 alsmuse analyze song.als --phrase-bars 4
 
-# Save output to file
+# Save A/V table to markdown file
 alsmuse analyze song.als -o av_table.md
 
 # Hide track events
 alsmuse analyze song.als --no-events
 ```
+
+### Video Visualization
+
+Generate an MP4 video showing song structure with animated lyrics:
+
+```bash
+# Generate video visualization
+alsmuse analyze song.als -o output.mp4
+
+# Include audio in the video
+alsmuse analyze song.als -o output.mp4 --audio song.wav
+
+# Video with transcribed lyrics
+alsmuse analyze song.als -o output.mp4 --transcribe
+
+# Video with provided lyrics
+alsmuse analyze song.als -o output.mp4 --lyrics lyrics.txt
+```
+
+The output format is determined by the file extension:
+- No extension or `.md` → Markdown A/V table
+- `.mp4` → Video visualization
 
 ### With Lyrics
 
@@ -168,7 +191,9 @@ Options:
   --whisper-model [tiny|base|small|medium|large]
                                   Whisper model size (default: base)
   --save-lyrics PATH              Save lyrics to file (LRC format with timestamps)
-  -o, --output PATH               Save A/V table to file
+  -o, --output PATH               Output file (.md for A/V table, .mp4 for video)
+  --audio PATH                    Audio file to include in video (only for .mp4)
+  --start-bar INTEGER             Bar number where the song starts (default: 1)
   --help                          Show this message and exit
 ```
 
@@ -192,16 +217,17 @@ uv run mypy src/
 ## Architecture
 
 ```
-CLI (cli.py) --> Application (analyze.py) --> Parser + Extractors + Formatter
+CLI (cli.py) --> Application (analyze.py) --> Parser + Extractors + Formatter/Visualizer
                                                       |
                                               Domain Models (models.py)
 ```
 
 - **cli.py**: Click-based command-line interface
-- **analyze.py**: Orchestrates the analysis pipeline
+- **analyze.py**: Orchestrates the analysis pipeline, routes to markdown or video output
 - **parser.py**: Parses ALS files (gzipped XML) into domain models
 - **extractors.py**: Section extraction strategies
 - **formatter.py**: Markdown table output formatting
+- **visualizer.py**: Video generation with animated lyrics
 - **audio.py**: Audio extraction and vocal track handling
 - **lyrics_align.py**: Lyrics parsing, alignment, and transcription
 - **models.py**: Immutable dataclasses for domain objects

@@ -413,6 +413,59 @@ class TimedLine:
 
 
 @dataclass(frozen=True)
+class TimeContext:
+    """Context for time display calculations with optional start offset.
+
+    Used to convert beat positions to display times, applying an offset
+    when the song doesn't start at bar 0 in the Ableton project.
+
+    Attributes:
+        bpm: Beats per minute for time conversion.
+        start_offset_beats: Beat position where the song actually starts.
+            All display times will be relative to this offset.
+    """
+
+    bpm: float
+    start_offset_beats: float = 0.0
+
+    def beats_to_display_seconds(self, beats: float) -> float:
+        """Convert beats to display time (with offset applied).
+
+        Args:
+            beats: Beat position in the Ableton timeline.
+
+        Returns:
+            Display time in seconds, adjusted for start offset.
+        """
+        adjusted_beats = beats - self.start_offset_beats
+        return adjusted_beats * 60 / self.bpm
+
+    @classmethod
+    def from_start_bar(
+        cls,
+        bpm: float,
+        start_bar: int | None,
+        time_signature: tuple[int, int] = (4, 4),
+    ) -> "TimeContext":
+        """Create TimeContext from a start bar specification.
+
+        Args:
+            bpm: Beats per minute.
+            start_bar: Bar number where the song starts (0-indexed).
+                None or 0 means no offset.
+            time_signature: Time signature as (numerator, denominator).
+
+        Returns:
+            TimeContext with appropriate offset.
+        """
+        if start_bar is None or start_bar == 0:
+            return cls(bpm=bpm)
+        numerator, denominator = time_signature
+        beats_per_bar = numerator * (4 / denominator)
+        return cls(bpm=bpm, start_offset_beats=start_bar * beats_per_bar)
+
+
+@dataclass(frozen=True)
 class TimedSegment:
     """A transcribed segment with word-level timing.
 

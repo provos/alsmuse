@@ -4,7 +4,7 @@ Pure functions for converting sections to various output formats.
 These functions have no side effects and are easily testable.
 """
 
-from .models import Phrase, Section, TrackEvent
+from .models import Phrase, Section, TimeContext, TrackEvent
 
 
 def format_time(seconds: float) -> str:
@@ -32,7 +32,7 @@ def format_time(seconds: float) -> str:
     return f"{minutes}:{remaining_seconds:04.1f}"
 
 
-def format_av_table(sections: list[Section], bpm: float) -> str:
+def format_av_table(sections: list[Section], time_ctx: TimeContext) -> str:
     """Format sections as a markdown A/V table.
 
     Creates a markdown table with Time, Audio, and Video columns.
@@ -40,7 +40,7 @@ def format_av_table(sections: list[Section], bpm: float) -> str:
 
     Args:
         sections: List of sections to format.
-        bpm: Beats per minute for time conversion.
+        time_ctx: TimeContext for time conversion (includes BPM and offset).
 
     Returns:
         Markdown formatted table as a string.
@@ -50,7 +50,8 @@ def format_av_table(sections: list[Section], bpm: float) -> str:
         ...     Section(name="INTRO", start_beats=0, end_beats=16),
         ...     Section(name="VERSE1", start_beats=16, end_beats=32),
         ... ]
-        >>> print(format_av_table(sections, bpm=120))
+        >>> time_ctx = TimeContext(bpm=120)
+        >>> print(format_av_table(sections, time_ctx))
         | Time | Audio | Video |
         |------|-------|-------|
         | 0:00 | INTRO | |
@@ -62,7 +63,7 @@ def format_av_table(sections: list[Section], bpm: float) -> str:
     ]
 
     for section in sections:
-        time_str = format_time(section.start_time(bpm))
+        time_str = format_time(time_ctx.beats_to_display_seconds(section.start_beats))
         lines.append(f"| {time_str} | {section.name} | |")
 
     return "\n".join(lines)
@@ -108,7 +109,7 @@ def format_events(events: tuple[TrackEvent, ...]) -> str:
 
 def format_phrase_table(
     phrases: list[Phrase],
-    bpm: float,
+    time_ctx: TimeContext,
     show_events: bool = True,
     show_lyrics: bool = False,
 ) -> str:
@@ -120,7 +121,7 @@ def format_phrase_table(
 
     Args:
         phrases: List of phrases to format.
-        bpm: Beats per minute for time conversion.
+        time_ctx: TimeContext for time conversion (includes BPM and offset).
         show_events: Whether to include events in the Audio column.
         show_lyrics: Whether to include lyrics in the Audio column.
 
@@ -128,14 +129,15 @@ def format_phrase_table(
         Markdown formatted table as a string.
 
     Examples:
-        >>> from alsmuse.models import Phrase
+        >>> from alsmuse.models import Phrase, TimeContext
         >>> phrases = [
         ...     Phrase(start_beats=0, end_beats=8, section_name="INTRO",
         ...            is_section_start=True),
         ...     Phrase(start_beats=8, end_beats=16, section_name="...",
         ...            is_section_start=False),
         ... ]
-        >>> print(format_phrase_table(phrases, bpm=120, show_events=False))
+        >>> time_ctx = TimeContext(bpm=120)
+        >>> print(format_phrase_table(phrases, time_ctx, show_events=False))
         | Time | Audio | Video |
         |------|-------|-------|
         | 0:00 | INTRO |  |
@@ -148,7 +150,7 @@ def format_phrase_table(
     ]
 
     for phrase in phrases:
-        time_str = format_time(phrase.start_time(bpm))
+        time_str = format_time(time_ctx.beats_to_display_seconds(phrase.start_beats))
 
         # Build audio content with <br> separators
         audio_parts: list[str] = []
