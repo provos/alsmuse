@@ -70,6 +70,14 @@ PROGRESS_BAR_HEIGHT = 8
 
 # Animation timing
 EVENT_FADE_SECONDS = 4.0
+FILL_DURATION_SECONDS = 2.0  # Duration of drum fill animation
+
+# Drum fill progress bar
+FILL_BAR_Y = 525
+FILL_BAR_MAX_WIDTH = 500
+FILL_BAR_HEIGHT = 16
+FILL_BAR_COLOR = (255, 213, 79)  # #FFD54F amber/gold
+FILL_TEXT_COLOR = (255, 255, 255)  # White text on bar
 
 
 def _load_font_at_size(
@@ -454,9 +462,20 @@ def render_frame(state: FrameState, fonts: FontSet) -> Image.Image:
             PREV_NEXT_LYRIC_COLOR,
         )
 
-    # Draw event badges (horizontal row near bottom)
-    if state.active_events:
-        _draw_event_badges(draw, state.active_events, fonts.event)
+    # Separate fill events from enter/exit events
+    fill_events = [(e, age) for e, age in state.active_events if e.event_type == "fill"]
+    badge_events = [(e, age) for e, age in state.active_events if e.event_type != "fill"]
+
+    # Draw event badges (horizontal row near bottom) - only enter/exit events
+    if badge_events:
+        _draw_event_badges(draw, badge_events, fonts.event)
+
+    # Draw drum fill progress bars
+    for event, age in fill_events:
+        # Calculate progress (0 to 1 over FILL_DURATION_SECONDS)
+        fill_progress = min(1.0, age / FILL_DURATION_SECONDS)
+        fill_text = f"FILL {event.fill_context}" if event.fill_context else "DRUM FILL"
+        _draw_fill_progress_bar(draw, fill_text, fill_progress, fonts.event)
 
     # Draw progress bar
     progress = state.current_time / state.total_time if state.total_time > 0 else 0
@@ -592,6 +611,48 @@ def _draw_progress_bar(draw: ImageDraw.ImageDraw, progress: float) -> None:
             ],
             fill=PROGRESS_BAR_FILL_COLOR,
         )
+
+
+def _draw_fill_progress_bar(
+    draw: ImageDraw.ImageDraw,
+    fill_text: str,
+    progress: float,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+) -> None:
+    """Draw the drum fill progress bar that grows from center.
+
+    Args:
+        draw: ImageDraw object to draw on.
+        fill_text: Text to display (e.g., "FILL → DROP1").
+        progress: Progress value from 0.0 to 1.0.
+        font: Font to use for the label.
+    """
+    # Calculate current width based on progress (grows from center)
+    current_width = int(FILL_BAR_MAX_WIDTH * progress)
+    if current_width < 10:
+        current_width = 10  # Minimum width to show something
+
+    # Center the bar horizontally
+    center_x = VIDEO_WIDTH // 2
+    bar_left = center_x - current_width // 2
+    bar_right = center_x + current_width // 2
+
+    # Draw the bar background (slightly darker)
+    draw.rectangle(
+        [bar_left, FILL_BAR_Y, bar_right, FILL_BAR_Y + FILL_BAR_HEIGHT],
+        fill=FILL_BAR_COLOR,
+    )
+
+    # Draw the text centered on the bar
+    text_bbox = draw.textbbox((0, 0), fill_text, font=font)
+    text_width = text_bbox[2] - text_bbox[0]
+    text_height = text_bbox[3] - text_bbox[1]
+    text_x = center_x - text_width // 2
+    text_y = FILL_BAR_Y + (FILL_BAR_HEIGHT - text_height) // 2 - 2  # Slight adjustment
+
+    # Draw text with shadow for readability
+    draw.text((text_x + 1, text_y + 1), fill_text, font=font, fill=(0, 0, 0))
+    draw.text((text_x, text_y), fill_text, font=font, fill=FILL_TEXT_COLOR)
 
 
 def encode_video_with_ffmpeg(
