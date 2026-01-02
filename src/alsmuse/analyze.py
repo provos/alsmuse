@@ -13,7 +13,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 import click
-from tqdm import tqdm
 
 from .audio import (
     combine_clips_to_audio,
@@ -43,7 +42,6 @@ from .lyrics import (
 )
 from .lyrics_align import (
     align_lyrics,
-    refine_lines_with_bournemouth,
     segments_to_lines,
     transcribe_lyrics,
     validate_timed_lines,
@@ -268,9 +266,8 @@ def align_and_distribute_lyrics(
     2. Select vocal tracks (using explicit selection, auto-detection, or prompting)
     3. Combine vocal clips to a single audio file
     4. Run forced alignment with stable-ts
-    5. Refine with Bournemouth aligner if available (better for repeated lyrics)
-    6. Save aligned lyrics if requested
-    7. Distribute timed lyrics to phrases
+    5. Save aligned lyrics if requested
+    6. Distribute timed lyrics to phrases
 
     Args:
         als_path: Path to the .als file
@@ -351,30 +348,10 @@ def align_and_distribute_lyrics(
         )
 
         # Step 5: Reconstruct lines and distribute to phrases
-        original_lines = [line.strip() for line in all_lyrics_text.split("\n") if line.strip()]
+        original_lines = [
+            line.strip() for line in all_lyrics_text.split("\n") if line.strip()
+        ]
         timed_lines = words_to_lines(timed_words, original_lines)
-
-        # Step 5b: Refine with Bournemouth if available (handles repeated lyrics better)
-        pbar: tqdm[None] | None = None
-
-        def update_progress(current: int, total: int, text: str) -> None:
-            nonlocal pbar
-            if pbar is None:
-                pbar = tqdm(total=total, desc="Refining alignment", unit="line")
-            pbar.update(1)
-            pbar.set_postfix_str(text[:30])
-
-        timed_lines, refinement_messages = refine_lines_with_bournemouth(
-            combined_path,
-            timed_lines,
-            language=f"{language}-us" if language == "en" else language,
-            progress_callback=update_progress,
-            valid_ranges=valid_ranges,
-        )
-        if pbar is not None:
-            pbar.close()
-        for msg in refinement_messages:
-            click.echo(msg, err=True)
 
         # Validate alignment and warn about issues
         alignment_warnings = validate_timed_lines(timed_lines)
@@ -478,7 +455,7 @@ def transcribe_and_distribute_lyrics(
 
     try:
         try:
-            _, valid_ranges = combine_clips_to_audio(selected_clips, combined_path, bpm)
+            combine_clips_to_audio(selected_clips, combined_path, bpm)
         except Exception as e:
             raise AlignmentError(f"Failed to combine audio clips: {e}") from e
 
@@ -486,7 +463,7 @@ def transcribe_and_distribute_lyrics(
             logger.info("Saved combined vocals to: %s", combined_path)
 
         # Step 4 & 5: Transcribe and filter to valid ranges
-        segments, raw_text = transcribe_lyrics(
+        segments, _ = transcribe_lyrics(
             combined_path,
             language=language,
             model_size=model_size,
@@ -503,28 +480,6 @@ def transcribe_and_distribute_lyrics(
 
         # Step 7: Convert segments to lines
         timed_lines = segments_to_lines(segments)
-
-        # Step 7b: Refine with Bournemouth if available (handles repeated lyrics better)
-        pbar: tqdm[None] | None = None
-
-        def update_progress(current: int, total: int, text: str) -> None:
-            nonlocal pbar
-            if pbar is None:
-                pbar = tqdm(total=total, desc="Refining alignment", unit="line")
-            pbar.update(1)
-            pbar.set_postfix_str(text[:30])
-
-        timed_lines, refinement_messages = refine_lines_with_bournemouth(
-            combined_path,
-            timed_lines,
-            language=f"{language}-us" if language == "en" else language,
-            progress_callback=update_progress,
-            valid_ranges=valid_ranges,
-        )
-        if pbar is not None:
-            pbar.close()
-        for msg in refinement_messages:
-            click.echo(msg, err=True)
 
         # Validate transcription and warn about issues
         transcription_warnings = validate_timed_lines(timed_lines)

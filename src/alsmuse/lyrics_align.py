@@ -12,14 +12,9 @@ Features:
       known valid audio ranges (e.g., during silent gaps in the vocal track).
     - **Segment-based line breaking**: Use Whisper's natural phrase boundaries
       for transcription, splitting only long segments for readability.
-    - **Bournemouth refinement**: Optional phoneme-level alignment refinement
-      for repeated lyrics that stable-ts struggles with.
 
 For faster transcription on Apple Silicon, install the optional mlx-whisper
 backend: pip install 'alsmuse[align-mlx]'
-
-For improved alignment of repeated lyrics, install Bournemouth aligner:
-pip install 'alsmuse[align-bournemouth]' and brew install espeak-ng (macOS)
 
 Key Functions:
     - align_lyrics: Force-align lyrics text to audio with word-level timing.
@@ -28,7 +23,6 @@ Key Functions:
     - clip_words_to_valid_ranges: Filter hallucinations and clip stretched boundaries.
     - filter_segments_to_valid_ranges: Remove hallucinated segments.
     - words_to_lines: Reconstruct original line structure from word timestamps.
-    - refine_lines_with_bournemouth: Refine word timestamps using Bournemouth.
 """
 
 from __future__ import annotations
@@ -37,7 +31,6 @@ import re
 import shutil
 import tempfile
 import unicodedata
-from collections.abc import Callable
 from pathlib import Path
 
 import stable_whisper  # type: ignore[import-untyped]
@@ -814,93 +807,3 @@ def segments_to_lines(
 
     return lines
 
-
-def refine_lines_with_bournemouth(
-    audio_path: Path,
-    lines: list[TimedLine],
-    language: str = "en-us",
-    confidence_threshold: float = 0.5,
-    progress_callback: Callable[[int, int, str], None] | None = None,
-    valid_ranges: list[tuple[float, float]] | None = None,
-) -> tuple[list[TimedLine], list[str]]:
-    """Refine word timestamps using Bournemouth forced aligner with sequential gap-filling.
-
-    Processes the entire transcript chronologically using Bournemouth's phoneme-level
-    CTC Viterbi alignment. This approach:
-    - Fixes lines with missing timestamps (0.0/0.0) that stable-ts failed to align
-    - Handles repeated phrases by processing them in sequence
-    - Provides more accurate word boundaries
-    - Detects potential lyrics mismatches via confidence scores
-    - Skips silent regions when valid_ranges is provided
-
-    Processing is fast (~0.2s per 10s of audio on CPU) so all lines are refined.
-
-    Args:
-        audio_path: Path to the vocal audio file.
-        lines: List of TimedLine from initial alignment.
-        language: Language code for phonemization (default: "en-us").
-        confidence_threshold: Warn about lines below this confidence (default: 0.5).
-        progress_callback: Optional callback for progress updates.
-            Called with (current_line, total_lines, line_text) after each line.
-        valid_ranges: Optional list of (start, end) tuples indicating where
-            audio actually exists. If provided, search windows are constrained
-            to these ranges, skipping silent gaps.
-
-    Returns:
-        Tuple of:
-        - List of TimedLine with refined timestamps.
-        - List of info/warning messages about the refinement.
-
-    Note:
-        If Bournemouth is not available, returns the original lines unchanged.
-    """
-    # Import here to avoid circular imports and make it optional
-    try:
-        from .bournemouth_align import (  # noqa: PLC0415
-            is_bournemouth_available,
-            refine_alignment_with_bournemouth,
-        )
-    except ImportError:
-        return lines, ["Bournemouth aligner module not available"]
-
-    if not is_bournemouth_available():
-        return lines, ["Bournemouth aligner not installed or espeak-ng not found"]
-
-    messages: list[str] = []
-    messages.append(f"Refining {len(lines)} lines with Bournemouth (sequential gap-filling)...")
-
-    try:
-        refined_lines, warnings = refine_alignment_with_bournemouth(
-            audio_path,
-            lines,
-            language=language,
-            confidence_threshold=confidence_threshold,
-            progress_callback=progress_callback,
-            valid_ranges=valid_ranges,
-        )
-
-        # Count how many lines were actually modified
-        modified_count = sum(
-            1
-            for orig, refined in zip(lines, refined_lines, strict=False)
-            if orig.start != refined.start or orig.end != refined.end
-        )
-
-        # Count how many previously unaligned lines now have timestamps
-        fixed_unaligned = sum(
-            1
-            for orig, refined in zip(lines, refined_lines, strict=False)
-            if (orig.start == 0.0 and orig.end == 0.0)
-            and (refined.start > 0.0 or refined.end > 0.0)
-        )
-
-        messages.append(f"Refined {modified_count} lines ({fixed_unaligned} previously unaligned)")
-
-        # Add any warnings from the alignment
-        messages.extend(warnings)
-
-        return refined_lines, messages
-
-    except Exception as e:
-        messages.append(f"Bournemouth refinement failed: {e}")
-        return lines, messages

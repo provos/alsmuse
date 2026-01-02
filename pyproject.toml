@@ -21,9 +21,6 @@ dependencies = [
 [project.optional-dependencies]
 # Faster transcription on Apple Silicon
 align-mlx = ["mlx-whisper>=0.4.0"]
-# Bournemouth aligner for improved word-level alignment (handles repeated lyrics)
-# Requires espeak-ng system dependency: brew install espeak-ng (macOS)
-align-bournemouth = ["bournemouth-forced-aligner>=0.1.7"]
 
 [project.scripts]
 alsmuse = "alsmuse.cli:main"
