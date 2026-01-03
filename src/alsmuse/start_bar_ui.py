@@ -804,7 +804,7 @@ def _interactive_select(
                     break
 
                 elif key in ("esc", "q", "ctrl-c"):
-                    selected_bar = 0
+                    selected_bar = initial_bar
                     break
 
                 elif key == "left":

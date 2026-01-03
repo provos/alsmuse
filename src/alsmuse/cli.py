@@ -234,33 +234,34 @@ def analyze(
         effective_start_bar = start_bar
         start_bar_from_config = config.start_bar if config else None
 
-        if effective_start_bar is None and start_bar_from_config is not None:
-            effective_start_bar = start_bar_from_config
-            click.echo(f"Using saved start bar: {effective_start_bar}")
-
-        # Auto-detect and prompt if still not set and interactive
+        live_set = parse_als_file(als_file)
+        suggested = None
         if effective_start_bar is None:
-            live_set = parse_als_file(als_file)
-            suggested = detect_suggested_start_bar(live_set)
+            if start_bar_from_config is not None:
+                effective_start_bar = start_bar_from_config
+                click.echo(f"Using saved start bar: {effective_start_bar}")
+            else:
+                suggested = detect_suggested_start_bar(live_set)
+                effective_start_bar = suggested
 
-            if sys.stdin.isatty() and suggested > 0:
-                # Use rich interactive UI for start bar selection
-                effective_start_bar = select_start_bar_interactive(live_set, suggested)
+        if sys.stdin.isatty():
+            # Use rich interactive UI for start bar selection
+            effective_start_bar = select_start_bar_interactive(live_set, effective_start_bar)
 
-                # Save the chosen start bar to config
-                updated_config = MuseConfig(
-                    vocal_tracks=config.vocal_tracks if config else [],
-                    category_overrides=config.category_overrides if config else {},
-                    start_bar=effective_start_bar if effective_start_bar else None,
-                )
-                save_config(als_file, updated_config)
-            elif suggested > 0:
-                # Non-interactive but suggested start is non-zero
-                click.echo(
-                    f"Note: Song appears to start at bar {suggested}. "
-                    f"Use --start-bar {suggested} to adjust times.",
-                    err=True,
-                )
+            # Save the chosen start bar to config
+            updated_config = MuseConfig(
+                vocal_tracks=config.vocal_tracks if config else [],
+                category_overrides=config.category_overrides if config else {},
+                start_bar=effective_start_bar if effective_start_bar else None,
+            )
+            save_config(als_file, updated_config)
+        elif suggested > 0:
+            # Non-interactive but suggested start is non-zero
+            click.echo(
+                f"Note: Song appears to start at bar {suggested}. "
+                f"Use --start-bar {suggested} to adjust times.",
+                err=True,
+            )
 
         # Convert bars to beats (assuming 4/4 time)
         beats_per_phrase = phrase_bars * 4
