@@ -255,7 +255,7 @@ def analyze(
                 start_bar=effective_start_bar if effective_start_bar else None,
             )
             save_config(als_file, updated_config)
-        elif suggested > 0:
+        elif suggested is not None and suggested > 0:
             # Non-interactive but suggested start is non-zero
             click.echo(
                 f"Note: Song appears to start at bar {suggested}. "
