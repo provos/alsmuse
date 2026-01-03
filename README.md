@@ -33,6 +33,10 @@ ALSmuse analyzes Ableton Live Set (.als) files to extract musical structure, tra
 - **LRC Export**: Save aligned or transcribed lyrics in LRC format for reuse
 - **Video Visualization**: Generate MP4 videos showing song structure with animated lyrics, optionally muxed with audio
 
+## Demo
+
+https://github.com/user-attachments/assets/0652b05d-bd4e-405c-a430-883f173cc8db
+
 ## Installation
 
 ### Basic Installation
