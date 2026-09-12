@@ -122,6 +122,22 @@ Second verse line
 Chorus lyrics here
 ```
 
+### Align an Existing Vocal Export
+
+When you already have a vocal stem exported from Ableton, align it directly:
+
+```bash
+alsmuse align-audio vocals.wav --lyrics lyrics.txt -o lyrics.lrc \
+  --save-json lyrics.timing.json --whisper-model medium
+```
+
+This uses the existing forced alignment pipeline without rebuilding audio from
+clips or requiring a structure track. Export the vocals and full mix over the
+same time range: timestamps include leading silence and start at audio file zero.
+The LRC preserves lyric lines; JSON also saves line ends and word timestamps for
+video editing. Blank lines and `[SECTION]` headers are skipped. Remove non-sung
+production notes before alignment, and review model-generated timing by ear.
+
 ### ASR Transcription
 
 Automatically transcribe lyrics from vocal tracks:

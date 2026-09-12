@@ -10,6 +10,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 import click
 
+from .align_audio import align_audio
 from .analyze import analyze_als, detect_suggested_start_bar
 from .config import MuseConfig, load_config, save_config
 from .exceptions import ParseError, TrackNotFoundError
@@ -332,6 +333,9 @@ def analyze(
     except RuntimeError as e:
         click.echo(f"Error generating video: {e}", err=True)
         sys.exit(1)
+
+
+main.add_command(align_audio)
 
 
 if __name__ == "__main__":

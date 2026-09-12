@@ -296,8 +296,9 @@ def validate_timed_lines(
     """Validate timed lines and return warning messages for issues.
 
     Checks for:
-    1. Lines with start=0.0 that couldn't be aligned
+    1. Lines with no words and empty timing that couldn't be aligned
     2. Lines with impossibly close timing (within min_gap_seconds)
+    3. Words with no duration, indicating uncertain or failed word alignment
 
     Args:
         timed_lines: List of timed lines to validate.
@@ -309,8 +310,12 @@ def validate_timed_lines(
     """
     warnings: list[str] = []
 
-    # Check for unaligned lines (start=0.0)
-    unaligned = [line for line in timed_lines if line.start == 0.0 and line.text.strip()]
+    # A sung line can legitimately start at audio zero.
+    unaligned = [
+        line
+        for line in timed_lines
+        if line.start == line.end == 0.0 and not line.words and line.text.strip()
+    ]
     if unaligned:
         warnings.append(f"Warning: {len(unaligned)} line(s) could not be aligned (time=0:00):")
         for line in unaligned[:5]:  # Show first 5
@@ -359,6 +364,15 @@ def validate_timed_lines(
         if len(close_groups) > 3:
             remaining = sum(len(g) for g in close_groups[3:])
             warnings.append(f"  ... and {remaining} more lines in other groups")
+
+    instant_lines = [line for line in timed_lines if any(w.end <= w.start for w in line.words)]
+    if instant_lines:
+        warnings.append(
+            f"Warning: {len(instant_lines)} line(s) contain words with no duration; "
+            "review their alignment:"
+        )
+        for line in instant_lines:
+            warnings.append(f"  - {line.text}")
 
     return warnings
 
@@ -411,6 +425,9 @@ def align_lyrics(
         result = model.align(str(audio_path), lyrics_text, language=language)
     except Exception as e:
         raise AlignmentError(f"Alignment failed: {e}") from e
+
+    if result is None:
+        raise AlignmentError("Alignment produced no result. Check the audio and lyrics.")
 
     # Extract all words with timestamps
     all_words: list[TimedWord] = []
